@@ -1,0 +1,42 @@
+# Rust build artifacts
+target/
+
+# Node modules (in case future UI code gets added)
+node_modules/
+
+# dotenv environment files
+.env
+.env.*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# Output directories
+dist/
+build/
+out/
+
+# Temporary test scripts
+X-temporaryTestFilesGitIgnored/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE junk
+.idea/
+.vscode/
+*.swp
+
+# SQLite or local DB files
+*.sqlite
+*.sqlite3
+
+# Electron user data (if applicable)
+electron-user-data/
+
