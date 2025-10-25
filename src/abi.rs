@@ -1,0 +1,89 @@
+use anyhow::Result;
+use ethers_core::abi::Abi;
+
+pub const INKAN_ABI_JSON: &str = r#"[{
+  "type":"function","name":"createDelegationEvent","stateMutability":"nonpayable",
+  "inputs":[{"name":"inputData","type":"tuple","components":[
+    {"name":"delegatorPubkey","type":"bytes"},
+    {"name":"delegateePubkey","type":"bytes"},
+    {"name":"delegationStartTime","type":"uint256"},
+    {"name":"delegationEndTime","type":"uint256"},
+    {"name":"doesRevocationRequireDelegateeSignature","type":"bool"},
+    {"name":"nonce","type":"bytes16"},
+    {"name":"expectedAddressOfDeployedContract","type":"bytes"},
+    {"name":"rDelegatorPubkeySig","type":"bytes32"},
+    {"name":"sDelegatorPubkeySig","type":"bytes32"},
+    {"name":"vDelegatorPubkeySig","type":"uint8"},
+    {"name":"rDelegateePubkeySig","type":"bytes32"},
+    {"name":"sDelegateePubkeySig","type":"bytes32"},
+    {"name":"vDelegateePubkeySig","type":"uint8"}
+  ]}],
+  "outputs":[]
+},{
+  "type":"function","name":"createRevocationEvent","stateMutability":"nonpayable",
+  "inputs":[{"name":"inputData","type":"tuple","components":[
+    {"name":"revokerPubkey","type":"bytes"},
+    {"name":"revokeePubkey","type":"bytes"},
+    {"name":"revocationStartTime","type":"uint256"},
+    {"name":"revocationEndTime","type":"uint256"},
+    {"name":"nonce","type":"bytes16"},
+    {"name":"expectedAddressOfDeployedContract","type":"bytes"},
+    {"name":"rRevokerPubkeySig","type":"bytes32"},
+    {"name":"sRevokerPubkeySig","type":"bytes32"},
+    {"name":"vRevokerPubkeySig","type":"uint8"},
+    {"name":"rRevokeePubkeySig","type":"bytes32"},
+    {"name":"sRevokeePubkeySig","type":"bytes32"},
+    {"name":"vRevokeePubkeySig","type":"uint8"}
+  ]}],
+  "outputs":[]
+},{
+  "type":"function","name":"createPermanentInvalidationEvent","stateMutability":"nonpayable",
+  "inputs":[{"name":"inputData","type":"tuple","components":[
+    {"name":"invalidatedPubkey","type":"bytes"},
+    {"name":"nonce","type":"bytes16"},
+    {"name":"expectedAddressOfDeployedContract","type":"bytes"},
+    {"name":"rInvalidatedPubkeySig","type":"bytes32"},
+    {"name":"sInvalidatedPubkeySig","type":"bytes32"},
+    {"name":"vInvalidatedPubkeySig","type":"uint8"}
+  ]}],
+  "outputs":[]
+},{
+  "type":"function","name":"createRevocationEventFollowedByDelegationEvent","stateMutability":"nonpayable",
+  "inputs":[
+    {"name":"revocationInputData","type":"tuple","components":[
+      {"name":"revokerPubkey","type":"bytes"},
+      {"name":"revokeePubkey","type":"bytes"},
+      {"name":"revocationStartTime","type":"uint256"},
+      {"name":"revocationEndTime","type":"uint256"},
+      {"name":"nonce","type":"bytes16"},
+      {"name":"expectedAddressOfDeployedContract","type":"bytes"},
+      {"name":"rRevokerPubkeySig","type":"bytes32"},
+      {"name":"sRevokerPubkeySig","type":"bytes32"},
+      {"name":"vRevokerPubkeySig","type":"uint8"},
+      {"name":"rRevokeePubkeySig","type":"bytes32"},
+      {"name":"sRevokeePubkeySig","type":"bytes32"},
+      {"name":"vRevokeePubkeySig","type":"uint8"}
+    ]},
+    {"name":"delegationInputData","type":"tuple","components":[
+      {"name":"delegatorPubkey","type":"bytes"},
+      {"name":"delegateePubkey","type":"bytes"},
+      {"name":"delegationStartTime","type":"uint256"},
+      {"name":"delegationEndTime","type":"uint256"},
+      {"name":"doesRevocationRequireDelegateeSignature","type":"bool"},
+      {"name":"nonce","type":"bytes16"},
+      {"name":"expectedAddressOfDeployedContract","type":"bytes"},
+      {"name":"rDelegatorPubkeySig","type":"bytes32"},
+      {"name":"sDelegatorPubkeySig","type":"bytes32"},
+      {"name":"vDelegatorPubkeySig","type":"uint8"},
+      {"name":"rDelegateePubkeySig","type":"bytes32"},
+      {"name":"sDelegateePubkeySig","type":"bytes32"},
+      {"name":"vDelegateePubkeySig","type":"uint8"}
+    ]}
+  ],
+  "outputs":[]
+}]"#;
+
+pub fn load_abi() -> Result<Abi> {
+    Ok(serde_json::from_str::<Abi>(INKAN_ABI_JSON)?)
+}
+

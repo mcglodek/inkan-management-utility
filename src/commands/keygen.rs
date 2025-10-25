@@ -1,52 +1,34 @@
-// src/bin/keygen.rs
 use anyhow::{Context, Result};
 use bech32::{self, ToBase32, Variant};
-use clap::Parser;
 use ethers_core::types::Address;
 use ethers_core::utils::keccak256;
 use k256::ecdsa::SigningKey;
-use rand_core::OsRng; // add `rand_core = "0.6"` to Cargo.toml
+use rand_core::OsRng;
 use serde::Serialize;
 use std::{fs, path::PathBuf};
 
-#[derive(Parser, Debug)]
-#[command(
-    version,
-    about = "Local Ethereum secp256k1 key generator (offline). No network calls."
-)]
-struct Cli {
-    /// Number of keypairs to generate
-    #[arg(long, default_value = "1")]
-    count: u32,
-
-    /// Optional path to write JSON output (pretty-printed)
-    #[arg(long)]
-    out: Option<PathBuf>,
-}
-
 #[allow(non_snake_case)]
 #[derive(Serialize)]
-struct KeyRecord {
+pub struct KeyRecord {
     // Ethereum-friendly fields
-    privateKeyHex: String,                 // 0x + 32-byte hex
-    publicKeyUncompressed0x04: String,     // 0x04 || X || Y
-    publicKeyCompressed: String,           // 0x02/0x03 || X (33 bytes total)
-    address: String,                       // lowercase 0x…
+    pub privateKeyHex: String,                 // 0x + 32-byte hex
+    pub publicKeyUncompressed0x04: String,     // 0x04 || X || Y
+    pub publicKeyCompressed: String,           // 0x02/0x03 || X (33 bytes)
+    pub address: String,                       // lowercase 0x…
 
     // Nostr-style convenience fields (raw hex)
-    privateKeyHexNostrFormat: String,      // 32-byte hex, no 0x
-    publicKeyHexNostrFormat: String,       // 32-byte X-only hex (compressed pubkey w/o first byte)
+    pub privateKeyHexNostrFormat: String,      // 32-byte hex, no 0x
+    pub publicKeyHexNostrFormat: String,       // 32-byte X-only hex
 
     // Nostr bech32 encodings (NIP-19)
-    nsec: String,                          // bech32 of 32-byte privkey
-    npub: String,                          // bech32 of 32-byte x-only pubkey
+    pub nsec: String,                          // bech32 of 32-byte privkey
+    pub npub: String,                          // bech32 of 32-byte x-only pubkey
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let mut out: Vec<KeyRecord> = Vec::with_capacity(cli.count as usize);
+pub fn generate(count: u32) -> Result<Vec<KeyRecord>> {
+    let mut out: Vec<KeyRecord> = Vec::with_capacity(count as usize);
 
-    for _ in 0..cli.count {
+    for _ in 0..count {
         // Generate a fresh secp256k1 keypair
         let sk = SigningKey::random(&mut OsRng);
 
@@ -86,25 +68,27 @@ fn main() -> Result<()> {
             publicKeyUncompressed0x04: pub_uncompressed_hex,
             publicKeyCompressed: pub_compressed_hex,
             address: address_lower,
-
             privateKeyHexNostrFormat: private_hex_no0x,
             publicKeyHexNostrFormat: nostr_pub_x_only_hex,
-
             nsec,
             npub,
         });
     }
 
-    if let Some(p) = cli.out {
-        let json = serde_json::to_string_pretty(&out)?;
+    Ok(out)
+}
+
+pub fn emit(records: Vec<KeyRecord>, out: Option<PathBuf>) -> Result<()> {
+    if let Some(p) = out {
+        let json = serde_json::to_string_pretty(&records)?;
         if let Some(parent) = p.parent() {
             fs::create_dir_all(parent).ok();
         }
         fs::write(&p, json).with_context(|| format!("writing {}", p.display()))?;
         println!("✓ Wrote {}", p.display());
     } else {
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        println!("{}", serde_json::to_string_pretty(&records)?);
     }
-
     Ok(())
 }
+

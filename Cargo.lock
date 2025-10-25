@@ -769,7 +769,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "inkan_offline_tx_batch"
+name = "inkan-management-utility"
 version = "0.1.0"
 dependencies = [
  "anyhow",

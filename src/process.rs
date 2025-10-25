@@ -1,0 +1,373 @@
+use anyhow::{anyhow, Result};
+use ethers_core::abi::{Abi, Function};
+use ethers_core::types::Address;
+use ethers_signers::{LocalWallet, Signer}; // <- bring Signer trait into scope
+use ethers_core::types::U256;
+
+use crate::decoder::{build_decoded, build_decoded_for_combo};
+use crate::encoding::{bytes16_or_random, encode_calldata, t_bool, t_bytes, t_uint};
+use crate::key::uncompressed_pubkey_0x04;
+use crate::signing::{sign_eip1559, sign_message_eip191};
+use crate::types::{BatchEntryOut, Item};
+use crate::util::{parse_addr, u256_to_be32};
+
+/// Options for the batch signer subcommand
+#[derive(Clone, Debug)]
+pub struct BatchOpts {
+    pub gas_limit: String,
+    pub max_fee_per_gas: String,
+    pub max_priority_fee_per_gas: String,
+}
+
+/// Build the struct payload, sign, and assemble calldata for each function
+pub async fn process_item(abi: &Abi, opts: &BatchOpts, it: &Item) -> Result<BatchEntryOut> {
+    let func_name = it.function_to_call.as_str();
+
+    // Common params
+    let chain_id = it.chain_id.unwrap_or(31337);
+    let nonce_tx = it.nonce.unwrap_or(0);
+    let to_addr: Address = parse_addr(&it.contract_address)?;
+    let gas_limit = &opts.gas_limit;
+    let max_fee = &opts.max_fee_per_gas;
+    let max_prio = &opts.max_priority_fee_per_gas;
+
+    // Helper to make a wallet from privkey hex
+    let mk_wallet = |hexpk: &str| -> Result<LocalWallet> {
+        let pk = hexpk.strip_prefix("0x").unwrap_or(hexpk);
+        let bytes = hex::decode(pk)?;
+        let sk = k256::ecdsa::SigningKey::from_slice(&bytes)?;
+        Ok(LocalWallet::from(sk).with_chain_id(chain_id))
+    };
+
+    // Use Abi::function() (unique names in this ABI)
+    let func: &Function = abi
+        .function(func_name)
+        .map_err(|_| anyhow!("function '{}' not in embedded ABI", func_name))?;
+
+    // Switch on function
+    let (_data, signed_tx_hex, decoded) = match func_name {
+        "createDelegationEvent" => {
+            let owner_pk = it
+                .type_a_privkey_x
+                .as_ref()
+                .ok_or_else(|| anyhow!("TYPE_A_PRIVKEY_X required"))?;
+            let wallet = mk_wallet(owner_pk)?;
+            // delegatee
+            let (delegatee_pubkey_0x04, must_zero_sigs, delegatee_wallet_opt) =
+                match (&it.type_a_privkey_y, &it.type_a_pubkey_y) {
+                    (Some(pk), _) if !pk.is_empty() => {
+                        (uncompressed_pubkey_0x04(&mk_wallet(pk)?), false, Some(mk_wallet(pk)?))
+                    }
+                    (_, Some(pubk)) if !pubk.is_empty() => (pubk.clone(), true, None),
+                    _ => return Err(anyhow!("Provide TYPE_A_PRIVKEY_Y or TYPE_A_PUBKEY_Y")),
+                };
+
+            let delegator_pubkey = uncompressed_pubkey_0x04(&wallet);
+            let delegation_start = it.type_a_uint_x.unwrap_or(0);
+            let delegation_end = it.type_a_uint_y.unwrap_or(0);
+            let requires_delegatee_sig =
+                it.type_a_boolean.as_deref().unwrap_or("true") == "true";
+            let uuid16 = bytes16_or_random(None)?;
+
+            // off-chain payload
+            let payload = vec![
+                t_bytes(&delegator_pubkey)?,
+                t_bytes(&delegatee_pubkey_0x04)?,
+                t_uint(delegation_start),
+                t_uint(delegation_end),
+                t_bool(requires_delegatee_sig),
+                uuid16.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+            ];
+            let encoded = ethers_core::abi::encode(&payload);
+            let msg_hash = ethers_core::utils::keccak256(encoded);
+            let sig_delegator = sign_message_eip191(&wallet, msg_hash).await?;
+
+            let (r_delegator, s_delegator, v_delegator) =
+                (sig_delegator.r, sig_delegator.s, sig_delegator.v);
+            let (r_delegatee, s_delegatee, v_delegatee) = if must_zero_sigs {
+                (U256::from(0u64), U256::from(0u64), 0u64)
+            } else {
+                let w = delegatee_wallet_opt.as_ref().unwrap();
+                let sig = sign_message_eip191(w, msg_hash).await?;
+                (sig.r, sig.s, sig.v)
+            };
+
+            let tuple_tokens = ethers_core::abi::Token::Tuple(vec![
+                t_bytes(&delegator_pubkey)?,
+                t_bytes(&delegatee_pubkey_0x04)?,
+                t_uint(delegation_start),
+                t_uint(delegation_end),
+                t_bool(requires_delegatee_sig),
+                uuid16.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(r_delegator)),
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(s_delegator)),
+                ethers_core::abi::Token::Uint(U256::from(v_delegator)),
+                ethers_core::abi::Token::FixedBytes(if must_zero_sigs {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(r_delegatee)
+                }),
+                ethers_core::abi::Token::FixedBytes(if must_zero_sigs {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(s_delegatee)
+                }),
+                ethers_core::abi::Token::Uint(U256::from(if must_zero_sigs { 0u64 } else { v_delegatee })),
+            ]);
+            let data = encode_calldata(func, vec![tuple_tokens])?;
+            let (raw, _typed) =
+                sign_eip1559(&wallet, chain_id, to_addr, nonce_tx, gas_limit, max_fee, max_prio, data.clone())
+                    .await?;
+            let decoded = build_decoded(&raw, &to_addr, &data, abi)?;
+            (data, raw, decoded)
+        }
+
+        "createRevocationEvent" => {
+            let owner_pk = it
+                .type_b_privkey_x
+                .as_ref()
+                .ok_or_else(|| anyhow!("TYPE_B_PRIVKEY_X required"))?;
+            let wallet = mk_wallet(owner_pk)?;
+            let (revokee_pubkey_0x04, must_zero_sigs, revokee_wallet_opt) =
+                match (&it.type_b_privkey_y, &it.type_b_pubkey_y) {
+                    (Some(pk), _) if !pk.is_empty() => {
+                        (uncompressed_pubkey_0x04(&mk_wallet(pk)?), false, Some(mk_wallet(pk)?))
+                    }
+                    (_, Some(pubk)) if !pubk.is_empty() => (pubk.clone(), true, None),
+                    _ => return Err(anyhow!("Provide TYPE_B_PRIVKEY_Y or TYPE_B_PUBKEY_Y")),
+                };
+            let revoker_pubkey = uncompressed_pubkey_0x04(&wallet);
+            let start = it.type_b_uint_x.unwrap_or(0);
+            let end = it.type_b_uint_y.unwrap_or(0);
+            let uuid16 = bytes16_or_random(None)?;
+            let payload = vec![
+                t_bytes(&revoker_pubkey)?,
+                t_bytes(&revokee_pubkey_0x04)?,
+                t_uint(start),
+                t_uint(end),
+                uuid16.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+            ];
+            let encoded = ethers_core::abi::encode(&payload);
+            let msg_hash = ethers_core::utils::keccak256(encoded);
+            let sig_revoker = sign_message_eip191(&wallet, msg_hash).await?;
+            let (r_revoker, s_revoker, v_revoker) = (sig_revoker.r, sig_revoker.s, sig_revoker.v);
+            let (r_revokee, s_revokee, v_revokee) = if must_zero_sigs {
+                (U256::from(0u64), U256::from(0u64), 0u64)
+            } else {
+                let w = revokee_wallet_opt.as_ref().unwrap();
+                let sig = sign_message_eip191(w, msg_hash).await?;
+                (sig.r, sig.s, sig.v)
+            };
+
+            let tuple = ethers_core::abi::Token::Tuple(vec![
+                t_bytes(&revoker_pubkey)?,
+                t_bytes(&revokee_pubkey_0x04)?,
+                t_uint(start),
+                t_uint(end),
+                uuid16.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(r_revoker)),
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(s_revoker)),
+                ethers_core::abi::Token::Uint(U256::from(v_revoker)),
+                ethers_core::abi::Token::FixedBytes(if must_zero_sigs {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(r_revokee)
+                }),
+                ethers_core::abi::Token::FixedBytes(if must_zero_sigs {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(s_revokee)
+                }),
+                ethers_core::abi::Token::Uint(U256::from(if must_zero_sigs { 0u64 } else { v_revokee })),
+            ]);
+            let data = encode_calldata(func, vec![tuple])?;
+            let (raw, _typed) =
+                sign_eip1559(&wallet, chain_id, to_addr, nonce_tx, gas_limit, max_fee, max_prio, data.clone())
+                    .await?;
+            let decoded = build_decoded(&raw, &to_addr, &data, abi)?;
+            (data, raw, decoded)
+        }
+
+        "createPermanentInvalidationEvent" => {
+            let owner_pk = it
+                .type_c_privkey_x
+                .as_ref()
+                .ok_or_else(|| anyhow!("TYPE_C_PRIVKEY_X required"))?;
+            let wallet = mk_wallet(owner_pk)?;
+            let invalidated_pubkey = uncompressed_pubkey_0x04(&wallet);
+            let uuid16 = bytes16_or_random(None)?;
+            let payload = vec![
+                t_bytes(&invalidated_pubkey)?,
+                uuid16.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+            ];
+            let encoded = ethers_core::abi::encode(&payload);
+            let msg_hash = ethers_core::utils::keccak256(encoded);
+            let sig = sign_message_eip191(&wallet, msg_hash).await?;
+            let (r, s, v) = (sig.r, sig.s, sig.v);
+
+            let tuple = ethers_core::abi::Token::Tuple(vec![
+                t_bytes(&invalidated_pubkey)?,
+                uuid16.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(r)),
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(s)),
+                ethers_core::abi::Token::Uint(U256::from(v)),
+            ]);
+            let data = encode_calldata(func, vec![tuple])?;
+            let (raw, _typed) =
+                sign_eip1559(&wallet, chain_id, to_addr, nonce_tx, gas_limit, max_fee, max_prio, data.clone())
+                    .await?;
+            let decoded = build_decoded(&raw, &to_addr, &data, abi)?;
+            (data, raw, decoded)
+        }
+
+        "createRevocationEventFollowedByDelegationEvent" => {
+            // owner is TYPE_A_PRIVKEY_X for both sides (as in your Node code)
+            let owner_pk = it
+                .type_a_privkey_x
+                .as_ref()
+                .ok_or_else(|| anyhow!("TYPE_A_PRIVKEY_X required"))?;
+            let wallet = mk_wallet(owner_pk)?;
+            // A side (delegation)
+            let (delegatee_pubkey_0x04, must_zero_delegatee, delegatee_wallet_opt) =
+                match (&it.type_a_privkey_y, &it.type_a_pubkey_y) {
+                    (Some(pk), _) if !pk.is_empty() => {
+                        (uncompressed_pubkey_0x04(&mk_wallet(pk)?), false, Some(mk_wallet(pk)?))
+                    }
+                    (_, Some(pubk)) if !pubk.is_empty() => (pubk.clone(), true, None),
+                    _ => return Err(anyhow!("Provide TYPE_A_PRIVKEY_Y or TYPE_A_PUBKEY_Y")),
+                };
+            // B side (revocation)
+            let (revokee_pubkey_0x04, must_zero_revokee, revokee_wallet_opt) =
+                match (&it.type_b_privkey_y, &it.type_b_pubkey_y) {
+                    (Some(pk), _) if !pk.is_empty() => {
+                        (uncompressed_pubkey_0x04(&mk_wallet(pk)?), false, Some(mk_wallet(pk)?))
+                    }
+                    (_, Some(pubk)) if !pubk.is_empty() => (pubk.clone(), true, None),
+                    _ => return Err(anyhow!("Provide TYPE_B_PRIVKEY_Y or TYPE_B_PUBKEY_Y")),
+                };
+
+            let delegator_pubkey = uncompressed_pubkey_0x04(&wallet);
+            // A params
+            let a_start = it.type_a_uint_x.unwrap_or(0);
+            let a_end = it.type_a_uint_y.unwrap_or(0);
+            let a_req = it.type_a_boolean.as_deref().unwrap_or("true") == "true";
+            let a_nonce = bytes16_or_random(None)?;
+            // B params
+            let b_start = it.type_b_uint_x.unwrap_or(0);
+            let b_end = it.type_b_uint_y.unwrap_or(0);
+            let b_nonce = bytes16_or_random(None)?;
+
+            // Type A payload/signatures
+            let payload_a = vec![
+                t_bytes(&delegator_pubkey)?,
+                t_bytes(&delegatee_pubkey_0x04)?,
+                t_uint(a_start),
+                t_uint(a_end),
+                t_bool(a_req),
+                a_nonce.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+            ];
+            let enc_a = ethers_core::abi::encode(&payload_a);
+            let hash_a = ethers_core::utils::keccak256(enc_a);
+            let sig_a_delegator = sign_message_eip191(&wallet, hash_a).await?;
+            let (r_a_del, s_a_del, v_a_del) =
+                (sig_a_delegator.r, sig_a_delegator.s, sig_a_delegator.v);
+            let (r_a_dee, s_a_dee, v_a_dee) = if must_zero_delegatee {
+                (U256::from(0u64), U256::from(0u64), 0u64)
+            } else {
+                let w = delegatee_wallet_opt.as_ref().unwrap();
+                let sig = sign_message_eip191(w, hash_a).await?;
+                (sig.r, sig.s, sig.v)
+            };
+
+            // Type B payload/signatures
+            let payload_b = vec![
+                t_bytes(&delegator_pubkey)?,
+                t_bytes(&revokee_pubkey_0x04)?,
+                t_uint(b_start),
+                t_uint(b_end),
+                b_nonce.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+            ];
+            let enc_b = ethers_core::abi::encode(&payload_b);
+            let hash_b = ethers_core::utils::keccak256(enc_b);
+            let sig_b_revoker = sign_message_eip191(&wallet, hash_b).await?;
+            let (r_b_rev, s_b_rev, v_b_rev) = (sig_b_revoker.r, sig_b_revoker.s, sig_b_revoker.v);
+            let (r_b_ree, s_b_ree, v_b_ree) = if must_zero_revokee {
+                (U256::from(0u64), U256::from(0u64), 0u64)
+            } else {
+                let w = revokee_wallet_opt.as_ref().unwrap();
+                let sig = sign_message_eip191(w, hash_b).await?;
+                (sig.r, sig.s, sig.v)
+            };
+
+            // Order: [revocationInputData (B), delegationInputData (A)]
+            let tuple_b = ethers_core::abi::Token::Tuple(vec![
+                t_bytes(&delegator_pubkey)?,
+                t_bytes(&revokee_pubkey_0x04)?,
+                t_uint(b_start),
+                t_uint(b_end),
+                b_nonce.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(r_b_rev)),
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(s_b_rev)),
+                ethers_core::abi::Token::Uint(U256::from(v_b_rev)),
+                ethers_core::abi::Token::FixedBytes(if must_zero_revokee {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(r_b_ree)
+                }),
+                ethers_core::abi::Token::FixedBytes(if must_zero_revokee {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(s_b_ree)
+                }),
+                ethers_core::abi::Token::Uint(U256::from(if must_zero_revokee { 0u64 } else { v_b_ree })),
+            ]);
+            let tuple_a = ethers_core::abi::Token::Tuple(vec![
+                t_bytes(&delegator_pubkey)?,
+                t_bytes(&delegatee_pubkey_0x04)?,
+                t_uint(a_start),
+                t_uint(a_end),
+                t_bool(a_req),
+                a_nonce.clone(),
+                t_bytes(&it.contract_address.to_ascii_lowercase())?,
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(r_a_del)),
+                ethers_core::abi::Token::FixedBytes(u256_to_be32(s_a_del)),
+                ethers_core::abi::Token::Uint(U256::from(v_a_del)),
+                ethers_core::abi::Token::FixedBytes(if must_zero_delegatee {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(r_a_dee)
+                }),
+                ethers_core::abi::Token::FixedBytes(if must_zero_delegatee {
+                    vec![0u8; 32]
+                } else {
+                    u256_to_be32(s_a_dee)
+                }),
+                ethers_core::abi::Token::Uint(U256::from(if must_zero_delegatee { 0u64 } else { v_a_dee })),
+            ]);
+
+            let data = encode_calldata(func, vec![tuple_b, tuple_a])?;
+            let (raw, _typed) =
+                sign_eip1559(&wallet, chain_id, to_addr, nonce_tx, gas_limit, max_fee, max_prio, data.clone())
+                    .await?;
+            let decoded = build_decoded_for_combo(&raw, &to_addr, &data, abi)?;
+            (data, raw, decoded)
+        }
+
+        _ => return Err(anyhow!("Unsupported FUNCTION_TO_CALL: {}", func_name)),
+    };
+
+    Ok(BatchEntryOut {
+        signed_tx: signed_tx_hex,
+        decoded_tx: decoded,
+    })
+}
+
