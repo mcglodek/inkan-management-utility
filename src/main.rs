@@ -988,3 +988,4 @@ async fn main() -> Result<()> {
     println!("✓ Wrote {}", cli.out.display());
     Ok(())
 }
+
