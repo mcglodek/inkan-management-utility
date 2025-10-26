@@ -1,7 +1,3 @@
-use anyhow::{Context, Result};
-use clap::Parser;
-use std::fs;
-
 mod abi;
 mod cli;
 mod decoder;
@@ -12,6 +8,11 @@ mod signing;
 mod types;
 mod util;
 mod commands;
+mod tui; // NEW
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use std::fs;
 
 use crate::abi::load_abi;
 use crate::cli::{Cli, Command};
@@ -56,6 +57,9 @@ async fn main() -> Result<()> {
             commands::keygen::emit(records, out)?;
             Ok(())
         }
+
+        Command::Menu => {
+            tui::run_menu().await
+        }
     }
 }
-

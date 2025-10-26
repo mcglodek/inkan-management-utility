@@ -20,9 +20,11 @@ lerna-debug.log*
 dist/
 build/
 out/
+outputFiles/
 
 # Temporary test scripts
 X-temporaryTestFilesGitIgnored/
+inputFiles/
 
 # OS junk
 .DS_Store

@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use ethers_core::types::{
-    transaction::eip2718::TypedTransaction, transaction::eip2930::AccessList, Address,
-    Eip1559TransactionRequest, H256, NameOrAddress, Signature, U256,
-};
+     transaction::eip2718::TypedTransaction, Address,
+     Eip1559TransactionRequest, H256, NameOrAddress, Signature, U256,
+ };
 use ethers_core::utils::{keccak256, rlp};
 use ethers_signers::{LocalWallet, Signer};
 
