@@ -14,7 +14,7 @@ use ratatui::{
     prelude::Frame,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use std::{fs, io};
@@ -22,6 +22,8 @@ use std::{fs, io};
 use crate::abi::load_abi;
 use crate::commands;
 use crate::process::{process_item, BatchOpts};
+use textwrap::wrap;
+
 
 // shared defaults
 mod defaults;
@@ -125,7 +127,9 @@ fn help_menu<'a>() -> Paragraph<'a> {
         span_key("Enter"), span_text(" Select"), span_sep(),
         span_key("Ctrl+Q"), span_text(" Quit"),
     ]);
-    Paragraph::new(line).block(Block::default().borders(Borders::ALL))
+    Paragraph::new(line)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
 }
 fn help_keygen<'a>() -> Paragraph<'a> {
     let line = Line::from(vec![
@@ -137,7 +141,9 @@ fn help_keygen<'a>() -> Paragraph<'a> {
         span_key("Esc"), span_text(" Back"), span_sep(),
         span_key("Ctrl+Q"), span_text(" Quit"),
     ]);
-    Paragraph::new(line).block(Block::default().borders(Borders::ALL))
+    Paragraph::new(line)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
 }
 fn help_batch<'a>() -> Paragraph<'a> {
     let line = Line::from(vec![
@@ -148,7 +154,9 @@ fn help_batch<'a>() -> Paragraph<'a> {
         span_key("Esc"), span_text(" Back"), span_sep(),
         span_key("Ctrl+Q"), span_text(" Quit"),
     ]);
-    Paragraph::new(line).block(Block::default().borders(Borders::ALL))
+    Paragraph::new(line)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
 }
 
 // Bash-style block cursor that covers the character (no shifting).
@@ -412,48 +420,168 @@ impl ScreenWidget for MainMenuScreen {
     }
 
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(2)
-            .constraints(
-                [
-                    Constraint::Length(3),
-                    Constraint::Min(5),
-                    Constraint::Length(3),
-                ]
-                .as_ref(),
-            )
-            .split(size);
+    // ── Content strings ──
+    let header_text = "Inkan Management Utility — Main Menu";
+    // You can use a single long string with \n\n for paragraphs or keep Lines like you had.
+    let explanation_paras = [
+        "Welcome to the Inkan Management Utility.",
+        "This tool lets you generate/export keys and sign EIP-1559 calls offline.",
+        "Use ↑/↓/Tab to navigate, Enter to select.",
+    ];
 
-let header = Paragraph::new("Inkan Management Utility — Main Menu")
-    .alignment(Alignment::Center)
-    .block(draw_frame_title(self.title()));
+    // ── Layout constants (match what you render) ──
+    let page_margin_y = 2u16; // Layout::margin(2)
+    let footer_height = 3u16; // help bar (fixed)
+    let middle_inner_margin_y = 1u16; // top/bottom inner margin inside middle box
+    let middle_border_y = 1u16; // top border + bottom border (we'll add *2 below)
+    let top_inner_margin_y = 1u16; // top/bottom inner margin inside top box
+    let top_border_y = 1u16; // top + bottom borders (we'll add *2 below)
 
-        let items = MenuItem::all();
-        let list_items: Vec<ListItem> = items
-            .iter()
-            .enumerate()
-            .map(|(i, it)| {
-                let selected = i == self.menu_index;
-                let prefix = if selected { "▶ " } else { "  " };
-                let line = Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Cyan)),
-                    Span::raw(it.label()),
-                ]);
-                ListItem::new(line)
-            })
-            .collect();
+    // ── Compute widths for wrapping (top box inner width) ──
+    // Total horizontal shrink: page margins (2+2) + borders (1+1) + inner margins (1+1) = 8 cols
+    let top_inner_width = size.width.saturating_sub(8) as usize;
 
-        let list = List::new(list_items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-
-        let footer = help_menu();
-
-        f.render_widget(header, chunks[0]);
-        f.render_widget(list, chunks[1]);
-        f.render_widget(footer, chunks[2]);
+    // ── Pre-wrap to count lines at current width ──
+    let header_wrapped = wrap(header_text, top_inner_width);
+    let mut exp_lines = 0usize;
+    for p in explanation_paras {
+        // Blank line between paragraphs: we’ll account for it by adding 1 after each (except last)
+        let wrapped = wrap(p, top_inner_width);
+        exp_lines += wrapped.len();
     }
+    let exp_paragraph_separators = if explanation_paras.is_empty() { 0 } else { explanation_paras.len().saturating_sub(1) };
+    exp_lines += exp_paragraph_separators; // add blank lines between paragraphs
+
+    let header_lines = header_wrapped.len() as u16;
+    let explanation_lines = exp_lines as u16;
+
+    // ── Figure out how tall the TOP needs to be for full visibility ──
+    // top_needed = borders(2) + inner margins(2) + header_lines + blank spacer(1) + explanation_lines
+    let top_needed = 2*top_border_y + 2*top_inner_margin_y + header_lines + 1 + explanation_lines;
+
+    // ── Figure out how tall the MIDDLE must be to fully show a 1-line list per item ──
+    let menu_items = MenuItem::all();
+    let menu_item_lines = menu_items.len() as u16; // each is a single line
+    // middle_needed = borders(2) + inner margins(2) + list lines
+    let middle_needed = 2*middle_border_y + 2*middle_inner_margin_y + menu_item_lines;
+
+    // ── Available height for top+middle (excluding page margins & footer) ──
+    let available_for_top_and_middle =
+        size.height
+            .saturating_sub(2 * page_margin_y) // page margin
+            .saturating_sub(footer_height);    // footer
+
+    // Cap the TOP so the MIDDLE always has enough space
+    let top_height_cap = available_for_top_and_middle.saturating_sub(middle_needed);
+    // Guarantee some minimum height for top (you can tweak; 5 looks nice)
+    let top_min = 5u16;
+    let top_height = top_needed
+        .min(top_height_cap.max(top_min)); // cap but keep a reasonable min
+
+    // Whatever remains goes to the middle
+    let middle_height = available_for_top_and_middle.saturating_sub(top_height);
+
+    // ── Build the outer page layout using the computed heights ──
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(page_margin_y as u16)
+        .constraints(
+            [
+                Constraint::Length(top_height),
+                Constraint::Length(middle_height),
+                Constraint::Length(footer_height),
+            ]
+            .as_ref(),
+        )
+        .split(size);
+
+    // ── TOP BOX (headline centered + blank line + explanatory text, auto-wrap) ──
+    let top_block = Block::default().borders(Borders::ALL);
+    f.render_widget(top_block, chunks[0]);
+
+    let top_inner = chunks[0].inner(&Margin { horizontal: 3, vertical: 1 });
+
+    // Split inside top: [header][blank][explanation...]
+    let top_inner_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_lines.max(1)), // header can be multi-line after wrap
+            Constraint::Length(1),                   // blank spacer
+            Constraint::Min(1),                      // rest is explanation
+        ])
+        .split(top_inner);
+
+    use ratatui::widgets::Wrap;
+    let header_para = Paragraph::new(header_text)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+
+    // Build Paragraph for explanation with explicit line breaks between wrapped paragraphs
+    // We’ll join wrapped lines and insert blank lines between paragraphs.
+    let mut explanation_lines_ratatui: Vec<Line> = Vec::new();
+    for (i, p) in explanation_paras.iter().enumerate() {
+        let wrapped = wrap(p, top_inner_width);
+        for seg in wrapped {
+            explanation_lines_ratatui.push(Line::from(seg.to_string()));
+        }
+        if i + 1 < explanation_paras.len() {
+            explanation_lines_ratatui.push(Line::from("")); // blank line between paragraphs
+        }
+    }
+    let explanation_para = Paragraph::new(explanation_lines_ratatui)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(header_para, top_inner_chunks[0]);
+    f.render_widget(explanation_para, top_inner_chunks[2]);
+
+    // ── MIDDLE BOX: menu list (no wrapping), always fully visible ──
+    let items = menu_items; // reuse
+    let list_items: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            let selected = i == self.menu_index;
+            let prefix = if selected { "▶ " } else { "  " };
+            let line = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                Span::raw(it.label()),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(list_items)
+        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+let middle_block = Block::default().borders(Borders::ALL);
+f.render_widget(middle_block, chunks[1]);
+
+// Add a slightly larger left margin for spacing from left border
+let middle_inner = chunks[1].inner(&Margin { horizontal: 3, vertical: 1 });
+f.render_widget(list, middle_inner);
+
+
+// ── FOOTER (single border + inner left margin) ──
+let footer_block = Block::default().borders(Borders::ALL);
+f.render_widget(footer_block, chunks[2]);
+
+// IMPORTANT: vertical: 1 so we don't draw on the top border line
+let footer_inner = chunks[2].inner(&Margin { horizontal: 3, vertical: 1 });
+
+// Unboxed footer content (no .block(...)), so we don't double-draw borders
+let footer_line = Line::from(vec![
+    span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
+    span_key("Enter"), span_text(" Select"), span_sep(),
+    span_key("Ctrl+Q"), span_text(" Quit"),
+]);
+
+let footer_para = Paragraph::new(footer_line).wrap(Wrap { trim: true });
+f.render_widget(footer_para, footer_inner);
+
+
+}
+
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
         match k.code {
@@ -467,7 +595,7 @@ let header = Paragraph::new("Inkan Management Utility — Main Menu")
                 }
             }
             KeyCode::Down | KeyCode::Tab => {
-    self.menu_index = (self.menu_index + 1) % MenuItem::all().len();
+                self.menu_index = (self.menu_index + 1) % MenuItem::all().len();
             }
             KeyCode::Enter => {
                 return Ok(match MenuItem::all()[self.menu_index] {
