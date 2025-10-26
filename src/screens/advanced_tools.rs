@@ -13,30 +13,44 @@ use textwrap::wrap;
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
 use crate::ui::style::{span_key, span_sep, span_text};
+use crate::ui::common_nav::esc_to_back;
 
 #[derive(Default)]
 pub struct AdvancedToolsScreen {
     menu_index: usize,
 }
-
 impl AdvancedToolsScreen {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 }
-
 
 #[derive(Copy, Clone, Debug)]
 enum MenuItem {
+    CreateKeyPair,
+    CreateDelegation,
+    CreateRevocation,
+    CreateRedelegation,
+    CreatePermanentInvalidation,
     BackToMain,
-    Quit,
 }
 impl MenuItem {
-    fn all() -> Vec<MenuItem> { vec![MenuItem::BackToMain, MenuItem::Quit] }
+    fn all() -> Vec<MenuItem> {
+        vec![
+            MenuItem::CreateKeyPair,
+            MenuItem::CreateDelegation,
+            MenuItem::CreateRevocation,
+            MenuItem::CreateRedelegation,
+            MenuItem::CreatePermanentInvalidation,
+            MenuItem::BackToMain,
+        ]
+    }
     fn label(&self) -> &'static str {
         match self {
-            MenuItem::BackToMain => "Back to Main Menu",
-            MenuItem::Quit => "Quit",
+            MenuItem::CreateKeyPair => "Create Key Pair",
+            MenuItem::CreateDelegation => "Create Delegation",
+            MenuItem::CreateRevocation => "Create Revocation",
+            MenuItem::CreateRedelegation => "Create Re-Delegation",
+            MenuItem::CreatePermanentInvalidation => "Create Permanent Invalidation",
+            MenuItem::BackToMain => "Back To Main Menu",
         }
     }
 }
@@ -48,10 +62,11 @@ impl ScreenWidget for AdvancedToolsScreen {
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
         let header_text = "Advanced Tools";
         let explanation_paras = [
-            "This is a placeholder page for advanced utilities.",
-            "Future items may include raw transaction builders, encoders, and diagnostics.",
+            "This section hosts advanced, offline-safe builders and utilities.",
+            "Select a tool to proceed. Press Ctrl+Q to confirm quit.",
         ];
 
+        // dynamic sizing like your other screens
         let top_inner_width = size.width.saturating_sub(2*2 + 2 + 2*3) as usize;
         let header_lines = wrap(header_text, top_inner_width).len() as u16;
 
@@ -126,6 +141,7 @@ impl ScreenWidget for AdvancedToolsScreen {
         let footer_line = Line::from(vec![
             span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
             span_key("Enter"), span_text(" Select"), span_sep(),
+            span_key("Esc"),     span_text(" Back"), span_sep(),
             span_key("Ctrl+Q"), span_text(" Quit"),
         ]);
         let footer_para = Paragraph::new(footer_line).wrap(Wrap { trim: true });
@@ -133,6 +149,10 @@ impl ScreenWidget for AdvancedToolsScreen {
     }
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
+                if let Some(t) = esc_to_back(k) {
+    return Ok(t); // Esc -> Back
+}
+        // Ctrl+Q here opens confirmation dialog (unlike main menu)
         if let KeyCode::Char('q') = k.code {
             if k.modifiers.contains(KeyModifiers::CONTROL) {
                 return Ok(Transition::Push(Box::new(crate::screens::ConfirmQuitScreen::new())));
@@ -149,8 +169,17 @@ impl ScreenWidget for AdvancedToolsScreen {
             }
             KeyCode::Enter => {
                 return Ok(match MenuItem::all()[self.menu_index] {
+                    MenuItem::CreateKeyPair =>
+                        Transition::Push(Box::new(crate::screens::CreateKeyPairScreen::new())),
+                    MenuItem::CreateDelegation =>
+                        Transition::Push(Box::new(crate::screens::CreateDelegationScreen::new())),
+                    MenuItem::CreateRevocation =>
+                        Transition::Push(Box::new(crate::screens::CreateRevocationScreen::new())),
+                    MenuItem::CreateRedelegation =>
+                        Transition::Push(Box::new(crate::screens::CreateRedelegationScreen::new())),
+                    MenuItem::CreatePermanentInvalidation =>
+                        Transition::Push(Box::new(crate::screens::CreatePermanentInvalidationScreen::new())),
                     MenuItem::BackToMain => Transition::Pop,
-                    MenuItem::Quit => Transition::Push(Box::new(crate::screens::ConfirmQuitScreen::new())),
                 })
             }
             _ => {}

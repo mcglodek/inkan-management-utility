@@ -13,6 +13,8 @@ use textwrap::wrap;
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
 use crate::ui::style::{span_key, span_sep, span_text};
+use crate::ui::common_nav::esc_to_back; // or `use crate::ui::esc_to_back;` if you re-exported
+
 
 #[derive(Default)]
 pub struct CreateInkanIdentityScreen {
@@ -128,6 +130,7 @@ impl ScreenWidget for CreateInkanIdentityScreen {
         let footer_line = Line::from(vec![
             span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
             span_key("Enter"), span_text(" Select"), span_sep(),
+            span_key("Esc"),     span_text(" Back"), span_sep(),
             span_key("Ctrl+Q"), span_text(" Quit"),
         ]);
         let footer_para = Paragraph::new(footer_line).wrap(Wrap { trim: true });
@@ -135,6 +138,12 @@ impl ScreenWidget for CreateInkanIdentityScreen {
     }
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
+        if let Some(t) = esc_to_back(k) {
+    return Ok(t); // Esc -> Back
+}
+
+
+
         if let KeyCode::Char('q') = k.code {
             if k.modifiers.contains(KeyModifiers::CONTROL) {
                 return Ok(Transition::Push(Box::new(crate::screens::ConfirmQuitScreen::new())));
