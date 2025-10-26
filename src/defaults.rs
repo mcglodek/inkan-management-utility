@@ -15,4 +15,7 @@ impl Defaults {
     pub const BATCH_GAS_LIMIT: &'static str = "30000000";
     pub const BATCH_MAX_FEE_PER_GAS: &'static str = "30000000000";
     pub const BATCH_MAX_PRIORITY_FEE_PER_GAS: &'static str = "2000000000";
+
+    /* Create Key Pair */
+    pub const CREATE_KEYPAIR_OUT_DIR: &'static str = "./generated_private_keys";
 }

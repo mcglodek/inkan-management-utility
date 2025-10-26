@@ -13,7 +13,7 @@ use textwrap::wrap;
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
 use crate::ui::style::{span_key, span_sep, span_text};
-use crate::ui::common_nav::esc_to_back; // or `use crate::ui::esc_to_back;` if you re-exported
+use crate::ui::common_nav::esc_to_back;
 
 
 #[derive(Default)]
@@ -107,23 +107,28 @@ impl ScreenWidget for CreateInkanIdentityScreen {
         f.render_widget(header_para, top_chunks[0]);
         f.render_widget(explanation_para, top_chunks[2]);
 
-        // MIDDLE
-        f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
+// MIDDLE
+f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
 
-        let list_items: Vec<ListItem> = menu_items.iter().enumerate().map(|(i, it)| {
-            let selected = i == self.menu_index;
-            let prefix = if selected { "▶ " } else { "  " };
-            let line = Line::from(vec![
-                Span::styled(prefix, Style::default().fg(Color::Cyan)),
-                Span::raw(it.label()),
-            ]);
-            ListItem::new(line)
-        }).collect();
+// Build list items, but start with an empty spacer line
+let mut list_items: Vec<ListItem> = Vec::new();
+list_items.push(ListItem::new(Line::from(""))); // <-- adds one blank line at top
 
-        let list = List::new(list_items)
-            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+for (i, it) in menu_items.iter().enumerate() {
+    let selected = i == self.menu_index;
+    let prefix = if selected { "▶ " } else { "  " };
+    let line = Line::from(vec![
+        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+        Span::raw(it.label()),
+    ]);
+    list_items.push(ListItem::new(line));
+}
 
-        f.render_widget(list, regions.middle_inner);
+let list = List::new(list_items)
+    .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+f.render_widget(list, regions.middle_inner);
+
 
         // FOOTER
         f.render_widget(Block::default().borders(Borders::ALL), regions.bottom);
