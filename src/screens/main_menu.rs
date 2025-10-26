@@ -1,0 +1,189 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    prelude::Frame,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+};
+use textwrap::wrap;
+
+use crate::app::{AppCtx, ScreenWidget, Transition};
+use crate::ui::layout::{three_box_layout, Margins};
+use crate::ui::style::{span_key, span_sep, span_text};
+
+#[derive(Default)]
+pub struct MainMenuScreen {
+    menu_index: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum MenuItem {
+    CreateIdentity,
+    RecoverIdentity,
+    AdvancedTools,
+    Keygen,
+    BatchSign,
+    Quit,
+}
+impl MenuItem {
+    fn all() -> Vec<MenuItem> {
+        vec![
+            MenuItem::CreateIdentity,
+            MenuItem::RecoverIdentity,
+            MenuItem::AdvancedTools,
+            MenuItem::Keygen,
+            MenuItem::BatchSign,
+            MenuItem::Quit,
+        ]
+    }
+    fn label(&self) -> &'static str {
+        match self {
+            MenuItem::CreateIdentity => "Create Inkan Identity",
+            MenuItem::RecoverIdentity => "Recover Inkan Identity",
+            MenuItem::AdvancedTools => "Advanced Tools",
+            MenuItem::Keygen => "Generate Keys",
+            MenuItem::BatchSign => "Batch Sign Transactions",
+            MenuItem::Quit => "Quit",
+        }
+    }
+}
+
+#[async_trait]
+impl ScreenWidget for MainMenuScreen {
+    fn title(&self) -> &str { "" }
+
+    fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
+        // content
+        let header_text = "Inkan Management Utility — Main Menu";
+        let explanation_paras = [
+            "Welcome to the Inkan Management Utility.",
+            "This tool lets you generate/export keys and sign EIP-1559 calls offline.",
+            "Use ↑/↓/Tab to navigate, Enter to select.",
+        ];
+
+        // estimate wrapped lines for dynamic top height
+        let top_inner_width = size.width.saturating_sub(2*2 /*page*/ + 2 /*borders*/ + 2*3 /*inner*/ ) as usize;
+        let header_lines = wrap(header_text, top_inner_width).len() as u16;
+
+        let mut exp_lines = 0usize;
+        for p in explanation_paras {
+            exp_lines += wrap(p, top_inner_width).len();
+        }
+        let explanation_lines = exp_lines as u16 + (explanation_paras.len().saturating_sub(1) as u16);
+
+        // top box needs: borders(2) + inner v(2) + header + blank(1) + explanation
+        let top_needed = 2 + 2 + header_lines + 1 + explanation_lines;
+
+        // middle must fit all items: borders(2) + inner v(2) + #items
+        let menu_items = MenuItem::all();
+        let middle_needed = 2 + 2 + (menu_items.len() as u16);
+        let footer_height = 3;
+
+        let regions = three_box_layout(
+            size,
+            top_needed,
+            middle_needed,
+            footer_height,
+            Margins { page: 2, inner_top: 3, inner_middle: 3, inner_bottom: 3 }
+        );
+
+        // TOP box
+        f.render_widget(Block::default().borders(Borders::ALL), regions.top);
+
+        let top_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_lines.max(1)),
+                Constraint::Length(1), // blank
+                Constraint::Min(1),
+            ])
+            .split(regions.top_inner);
+
+        let header_para = Paragraph::new(header_text)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+
+        let mut expl_lines: Vec<Line> = Vec::new();
+        for (i, p) in explanation_paras.iter().enumerate() {
+            for seg in wrap(p, top_inner_width) {
+                expl_lines.push(Line::from(seg.to_string()));
+            }
+            if i + 1 < explanation_paras.len() { expl_lines.push(Line::from("")); }
+        }
+        let explanation_para = Paragraph::new(expl_lines)
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(header_para, top_chunks[0]);
+        f.render_widget(explanation_para, top_chunks[2]);
+
+        // MIDDLE box (menu)
+        f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
+
+        let list_items: Vec<ListItem> = menu_items.iter().enumerate().map(|(i, it)| {
+            let selected = i == self.menu_index;
+            let prefix = if selected { "▶ " } else { "  " };
+            let line = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                Span::raw(it.label()),
+            ]);
+            ListItem::new(line)
+        }).collect();
+
+        let list = List::new(list_items)
+            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+        f.render_widget(list, regions.middle_inner);
+
+        // FOOTER (single border + inner margin, with wrapping)
+        f.render_widget(Block::default().borders(Borders::ALL), regions.bottom);
+
+        let footer_line = Line::from(vec![
+            span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
+            span_key("Enter"), span_text(" Select"), span_sep(),
+            span_key("Ctrl+Q"), span_text(" Quit"),
+        ]);
+        let footer_para = Paragraph::new(footer_line).wrap(Wrap { trim: true });
+        f.render_widget(footer_para, regions.bottom_inner);
+    }
+
+    async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
+        // Main menu: Ctrl+Q exits immediately (no confirm here)
+        if let KeyCode::Char('q') = k.code {
+            if k.modifiers.contains(KeyModifiers::CONTROL) {
+                return Ok(Transition::Quit);
+            }
+        }
+
+        match k.code {
+            KeyCode::Up => {
+                if self.menu_index == 0 { self.menu_index = MenuItem::all().len() - 1; }
+                else { self.menu_index -= 1; }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.menu_index = (self.menu_index + 1) % MenuItem::all().len();
+            }
+            KeyCode::Enter => {
+                return Ok(match MenuItem::all()[self.menu_index] {
+                    MenuItem::CreateIdentity =>
+                        Transition::Push(Box::new(crate::screens::CreateInkanIdentityScreen::new())),
+                    MenuItem::RecoverIdentity =>
+                        Transition::Push(Box::new(crate::screens::RecoverInkanIdentityScreen::new())),
+                    MenuItem::AdvancedTools =>
+                        Transition::Push(Box::new(crate::screens::AdvancedToolsScreen::new())),
+                    MenuItem::Keygen =>
+                        Transition::Push(Box::new(crate::screens::KeygenScreen::new())),
+                    MenuItem::BatchSign =>
+                        Transition::Push(Box::new(crate::screens::BatchScreen::new())),
+                    MenuItem::Quit =>
+                        Transition::Quit, // ← exit immediately from main menu
+                })
+            }
+            _ => {}
+        }
+        Ok(Transition::Stay)
+    }
+}

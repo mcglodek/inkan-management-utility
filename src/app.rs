@@ -1,0 +1,101 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::Rect,
+    prelude::Frame,
+    widgets::Clear,
+    Terminal,
+};
+use std::io;
+
+use crate::screens::ConfirmQuitScreen;
+
+pub enum Transition {
+    Stay,
+    Push(Box<dyn ScreenWidget>),
+    Pop,
+    Replace(Box<dyn ScreenWidget>),
+    Quit,
+}
+
+#[derive(Default)]
+pub struct AppCtx {
+    pub result_text: String,
+}
+
+#[async_trait]
+pub trait ScreenWidget {
+    fn title(&self) -> &str { "Inkan" }
+    fn draw(&self, f: &mut Frame<'_>, area: Rect, ctx: &AppCtx);
+    async fn on_key(&mut self, key: KeyEvent, ctx: &mut AppCtx) -> Result<Transition>;
+}
+
+pub async fn run_menu() -> Result<()> {
+    // terminal init
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?; // clean start
+
+    let mut ctx = AppCtx::default();
+    let mut stack: Vec<Box<dyn ScreenWidget>> = vec![Box::new(crate::screens::MainMenuScreen::default())];
+
+    loop {
+        terminal.draw(|f| {
+            let size = f.size();
+            if let Some(top) = stack.last() {
+                top.draw(f, size, &ctx);
+            } else {
+                // just in case—clear remaining area
+                f.render_widget(Clear, size);
+            }
+        })?;
+
+        if event::poll(std::time::Duration::from_millis(250))? {
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    // GLOBAL HOTKEY: Ctrl+Q shows confirm quit from anywhere
+                    if k.modifiers.contains(KeyModifiers::CONTROL) && matches!(k.code, KeyCode::Char('q' | 'Q')) {
+                        stack.push(Box::new(ConfirmQuitScreen::new()));
+                        continue;
+                    }
+
+                    if let Some(top) = stack.last_mut() {
+                        match top.on_key(k, &mut ctx).await? {
+                            Transition::Stay => {}
+                            Transition::Push(s) => stack.push(s),
+                            Transition::Pop => {
+                                stack.pop();
+                                if stack.is_empty() {
+                                    break;
+                                }
+                            }
+                            Transition::Replace(s) => {
+                                stack.pop();
+                                stack.push(s);
+                            }
+                            Transition::Quit => break,
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // restore
+    disable_raw_mode()?;
+    let out = terminal.backend_mut();
+    execute!(out, LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
