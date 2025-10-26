@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use ethers_core::types::U256;
-
 /// Batch input items (verbatim field names from your examples)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
