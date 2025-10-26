@@ -15,18 +15,19 @@ use crate::ui::layout::{three_box_layout, Margins};
 use crate::ui::style::{span_key, span_sep, span_text, button_spans};
 use crate::ui::common_nav::esc_to_back;
 use crate::ui::components::{TextField, field_line_text};
-use crate::defaults::Defaults; // ⬅ added
+use crate::defaults::Defaults;
 
 const CURSOR_BLOCK: &str = "█";
 
 #[derive(Default)]
 pub struct CreateKeyPairScreen {
-    field_index: usize,     // 0..=3 text fields, 4 method toggle, 5 submit, 6 cancel
+    field_index: usize,     // 0..=2 text fields, 3 show password, 4 text (out dir), 5 method toggle, 6 submit, 7 cancel
     nickname: TextField,
     password: TextField,
     confirm: TextField,
     out_dir: TextField,
     format_modern: bool,    // true = Argon2id + XChaCha20-Poly1305, false = OpenPGP AEAD
+    show_password: bool,    // NEW: show/hide password fields
 }
 
 impl CreateKeyPairScreen {
@@ -34,17 +35,18 @@ impl CreateKeyPairScreen {
         let mut s = Self::default();
         s.out_dir = TextField::with(Defaults::CREATE_KEYPAIR_OUT_DIR);
         s.format_modern = true;
+        s.show_password = false;
         s
     }
 
-    fn is_text(&self) -> bool { self.field_index <= 3 }
+    fn is_text(&self) -> bool { matches!(self.field_index, 0 | 1 | 2 | 4) }
 
     fn tf_mut(&mut self, idx: usize) -> &mut TextField {
         match idx {
             0 => &mut self.nickname,
             1 => &mut self.password,
             2 => &mut self.confirm,
-            3 => &mut self.out_dir,
+            4 => &mut self.out_dir,   // moved from 3 -> 4
             _ => unreachable!("tf_mut called on non-text field"),
         }
     }
@@ -54,35 +56,48 @@ impl CreateKeyPairScreen {
             0 => &self.nickname,
             1 => &self.password,
             2 => &self.confirm,
-            3 => &self.out_dir,
+            4 => &self.out_dir,       // moved from 3 -> 4
             _ => unreachable!("tf_ref called on non-text field"),
         }
     }
 
-    fn field_line_password(label: &str, tf: &TextField, selected: bool) -> Line<'static> {
-        let label_span = Span::styled(format!("{label}: "), Style::default().fg(Color::Yellow));
-        let masked = "•".repeat(tf.text.chars().count());
-
-        if selected {
-            let (left, right) = split_at_char(&masked, tf_cursor(tf));
-            Line::from(vec![
-                label_span,
-                Span::raw(left.to_string()),
-                Span::styled(CURSOR_BLOCK.to_string(), Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(right.to_string()),
-            ])
+    // Password field that visually matches field_line_text (yellow label and SAME cursor behavior/color).
+    // FIX: convert the cursor from char index -> byte index for the temporary TextField to avoid UTF-8 boundary panics.
+    fn field_line_password(label: &str, tf: &TextField, selected: bool, show: bool) -> Line<'static> {
+        // Determine the text to render (masked or plain)
+        let render = if show {
+            tf.text.clone()
         } else {
-            Line::from(vec![label_span, Span::raw(masked)])
-        }
+            "•".repeat(tf.text.chars().count())
+        };
+
+        // Build a temporary TextField with the rendered text and a BYTE-INDEX cursor
+        let mut tmp = TextField::with(&render);
+
+        // Clamp the original cursor as a CHAR index to the rendered length
+        let cursor_chars = tf.cursor.min(render.chars().count());
+
+        // Convert char index -> byte index safely
+        let cursor_bytes = if cursor_chars == 0 {
+            0
+        } else {
+            render
+                .char_indices()
+                .nth(cursor_chars)
+                .map(|(i, _)| i)
+                .unwrap_or_else(|| render.len())
+        };
+
+        tmp.cursor = cursor_bytes;
+
+        // Delegate to the shared renderer so the cursor looks/behaves exactly like in "Key Pair Name"
+        field_line_text(label, &tmp, selected)
     }
 
+    // Encryption Method line with yellow label and cyan value when focused.
     fn encryption_method_line(&self, selected: bool) -> Line<'static> {
         let label_span = Span::styled("Encryption Method: ", Style::default().fg(Color::Yellow));
-        let val = if self.format_modern {
-            "Argon2id + XChaCha20-Poly1305"
-        } else {
-            "OpenPGP AEAD"
-        };
+        let val = if self.format_modern { "Argon2id + XChaCha20-Poly1305" } else { "OpenPGP AEAD" };
 
         let val_style = if selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
@@ -93,6 +108,21 @@ impl CreateKeyPairScreen {
         Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
     }
 
+    // NEW: Show Password toggle line (yellow label; cyan + bold value when focused).
+    fn show_password_line(&self, selected: bool) -> Line<'static> {
+        let label_span = Span::styled("Show Password: ", Style::default().fg(Color::Yellow));
+        let val = if self.show_password { "On" } else { "Off" };
+
+        let val_style = if selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
+    }
+
+    // One horizontal line: < Submit >   < Cancel >
     fn buttons_line(submit_selected: bool, cancel_selected: bool) -> Line<'static> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.extend(button_spans("Submit", submit_selected));
@@ -114,6 +144,7 @@ impl ScreenWidget for CreateKeyPairScreen {
             "You can choose between Argon2id + XChaCha20-Poly1305 and OpenPGP AEAD encryption.",
         ];
 
+        // === TOP BOX ===
         let top_inner_width = size.width.saturating_sub(2*2 + 2 + 2*3) as usize;
         let header_lines = wrap(header_text, top_inner_width).len() as u16;
 
@@ -122,8 +153,11 @@ impl ScreenWidget for CreateKeyPairScreen {
         let explanation_lines = exp_lines as u16 + (explanation_paras.len().saturating_sub(1) as u16);
 
         let top_needed = 2 + 2 + header_lines + 1 + explanation_lines;
-        let middle_rows: u16 = 7 + 1;
+
+        // Middle: now we have 8 focusable positions (0..=7) plus spacer
+        let middle_rows: u16 = 8 + 1;
         let middle_needed = 2 + 2 + middle_rows;
+
         let footer_height = 3;
 
         let regions = three_box_layout(
@@ -165,17 +199,18 @@ impl ScreenWidget for CreateKeyPairScreen {
 
         lines.push(Line::from("")); // empty line above first field
         lines.push(field_line_text("Key Pair Name", self.tf_ref(0), self.field_index == 0));
-        lines.push(Self::field_line_password("Password For Output File", self.tf_ref(1), self.field_index == 1));
-        lines.push(Self::field_line_password("Confirm Password", self.tf_ref(2), self.field_index == 2));
-        lines.push(field_line_text("Output Directory", self.tf_ref(3), self.field_index == 3));
-        lines.push(self.encryption_method_line(self.field_index == 4));
-        lines.push(Line::from(""));
-        lines.push(Self::buttons_line(self.field_index == 5, self.field_index == 6));
+        lines.push(Self::field_line_password("Password For Output File", self.tf_ref(1), self.field_index == 1, self.show_password));
+        lines.push(Self::field_line_password("Confirm Password", self.tf_ref(2), self.field_index == 2, self.show_password));
+        lines.push(self.show_password_line(self.field_index == 3)); // directly under Confirm Password
+        lines.push(field_line_text("Output Directory", self.tf_ref(4), self.field_index == 4)); // Output Dir at index 4
+        lines.push(self.encryption_method_line(self.field_index == 5));
+        lines.push(Line::from("")); // spacer
+        lines.push(Self::buttons_line(self.field_index == 6, self.field_index == 7));
 
         let middle_para = Paragraph::new(lines);
         f.render_widget(middle_para, regions.middle_inner);
 
-        // FOOTER
+        // === BOTTOM BOX (legend) ===
         f.render_widget(Block::default().borders(Borders::ALL), regions.bottom);
         let footer_line = Line::from(vec![
             span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
@@ -189,7 +224,7 @@ impl ScreenWidget for CreateKeyPairScreen {
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
         if let Some(t) = esc_to_back(k) {
-            return Ok(t);
+            return Ok(t); // Esc -> Back
         }
 
         if let KeyCode::Char('q') = k.code {
@@ -199,28 +234,46 @@ impl ScreenWidget for CreateKeyPairScreen {
         }
 
         match k.code {
+            // Navigation
             KeyCode::Up => {
-                if self.field_index == 0 { self.field_index = 6; } else { self.field_index -= 1; }
+                if self.field_index == 0 { self.field_index = 7; } else { self.field_index -= 1; }
             }
             KeyCode::Down | KeyCode::Tab => {
-                self.field_index = (self.field_index + 1) % 7;
+                self.field_index = (self.field_index + 1) % 8;
             }
 
-            KeyCode::Enter if self.field_index == 5 => return Ok(Transition::Stay),
-            KeyCode::Enter if self.field_index == 6 => return Ok(Transition::Pop),
+            // Enter on buttons
+            KeyCode::Enter if self.field_index == 6 => {
+                // Submit action (wire up later)
+                return Ok(Transition::Stay);
+            }
+            KeyCode::Enter if self.field_index == 7 => {
+                return Ok(Transition::Pop);
+            }
 
-            KeyCode::Char(' ') if self.field_index == 4 => self.format_modern = !self.format_modern,
-            KeyCode::Left | KeyCode::Right if self.field_index == 4 => self.format_modern = !self.format_modern,
+            // Toggle Encryption Method (index 5)
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 5 => {
+                self.format_modern = !self.format_modern;
+            }
 
+            // Toggle Show Password (index 3)
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 3 => {
+                self.show_password = !self.show_password;
+            }
+
+            // Cursor movement within text fields (same as batch.rs)
             KeyCode::Left if self.is_text() => self.tf_mut(self.field_index).move_left(),
             KeyCode::Right if self.is_text() => self.tf_mut(self.field_index).move_right(),
             KeyCode::Home if self.is_text() => self.tf_mut(self.field_index).home(),
             KeyCode::End if self.is_text() => self.tf_mut(self.field_index).end(),
+
+            // Editing
             KeyCode::Backspace if self.is_text() => self.tf_mut(self.field_index).backspace(),
             KeyCode::Delete if self.is_text() => self.tf_mut(self.field_index).delete(),
             KeyCode::Char(c) if self.is_text() && !k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.tf_mut(self.field_index).insert_char(c)
             }
+
             _ => {}
         }
         Ok(Transition::Stay)
