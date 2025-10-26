@@ -855,6 +855,7 @@ name = "inkan-management-utility"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bech32",
  "clap",
  "crossterm",

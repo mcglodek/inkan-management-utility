@@ -85,9 +85,11 @@ pub fn emit(records: Vec<KeyRecord>, out: Option<PathBuf>) -> Result<()> {
             fs::create_dir_all(parent).ok();
         }
         fs::write(&p, json).with_context(|| format!("writing {}", p.display()))?;
-        println!("✓ Wrote {}", p.display());
+        // Intentionally no println! here — the TUI shows a modal with the result.
     } else {
-        println!("{}", serde_json::to_string_pretty(&records)?);
+        // In TUI mode we don't print JSON either; the caller (TUI) handles display.
+        // If you still need CLI behavior elsewhere, consider feature-gating:
+        // #[cfg(feature = "cli")] println!("{}", serde_json::to_string_pretty(&records)?);
     }
     Ok(())
 }
