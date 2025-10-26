@@ -10,7 +10,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     prelude::Frame,
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -118,38 +118,37 @@ fn span_text(s: &'static str) -> Span<'static> {
     Span::raw(s)
 }
 
-// BIOS-style help bars (now include Ctrl+Q)
+// BIOS-style help bars (include Ctrl+Q)
 fn help_menu<'a>() -> Paragraph<'a> {
     let line = Line::from(vec![
-        span_key("↑/↓"), span_text(" Navigate"), span_sep(),
+        span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
         span_key("Enter"), span_text(" Select"), span_sep(),
-        span_key("Ctrl+S"), span_text(" Save"), span_sep(),
         span_key("Ctrl+Q"), span_text(" Quit"),
     ]);
-    Paragraph::new(line).block(draw_frame_title("Help"))
+    Paragraph::new(line).block(Block::default().borders(Borders::ALL))
 }
 fn help_keygen<'a>() -> Paragraph<'a> {
     let line = Line::from(vec![
-        span_key("Tab/Shift+Tab/↑/↓"), span_text(" Move"), span_sep(),
-        span_key("Enter"), span_text(" Next (Submit on [Submit])"), span_sep(),
+        span_key("↑/↓/Tab"), span_text(" Move"), span_sep(),
+        span_key("Enter"), span_text(" Submit (on [Submit])"), span_sep(),
         span_key("Space/←/→"), span_text(" Toggle"), span_sep(),
         span_key("←/→/Home/End"), span_text(" Cursor"), span_sep(),
         span_key("Backspace/Delete"), span_text(" Edit"), span_sep(),
         span_key("Esc"), span_text(" Back"), span_sep(),
         span_key("Ctrl+Q"), span_text(" Quit"),
     ]);
-    Paragraph::new(line).block(draw_frame_title("Help"))
+    Paragraph::new(line).block(Block::default().borders(Borders::ALL))
 }
 fn help_batch<'a>() -> Paragraph<'a> {
     let line = Line::from(vec![
-        span_key("Tab/Shift+Tab/↑/↓"), span_text(" Move"), span_sep(),
-        span_key("Enter"), span_text(" Next (Submit on [Submit])"), span_sep(),
+        span_key("↑/↓/Tab"), span_text(" Move"), span_sep(),
+        span_key("Enter"), span_text(" Submit (on [Submit])"), span_sep(),
         span_key("←/→/Home/End"), span_text(" Cursor"), span_sep(),
         span_key("Backspace/Delete"), span_text(" Edit"), span_sep(),
         span_key("Esc"), span_text(" Back"), span_sep(),
         span_key("Ctrl+Q"), span_text(" Quit"),
     ]);
-    Paragraph::new(line).block(draw_frame_title("Help"))
+    Paragraph::new(line).block(Block::default().borders(Borders::ALL))
 }
 
 // Bash-style block cursor that covers the character (no shifting).
@@ -212,6 +211,16 @@ fn submit_line<'a>(focused: bool, label: &'a str) -> Line<'a> {
     ])
 }
 
+/// Center an absolute-size rectangle within `r`.
+fn centered_rect_abs(width: u16, height: u16, r: Rect) -> Rect {
+    let w = width.min(r.width.saturating_sub(2));
+    let h = height.min(r.height.saturating_sub(2));
+    let x = r.x + (r.width.saturating_sub(w)) / 2;
+    let y = r.y + (r.height.saturating_sub(h)) / 2;
+    Rect { x, y, width: w, height: h }
+}
+
+/// Old percentage-based helper (used elsewhere).
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -251,66 +260,105 @@ impl ConfirmQuitScreen {
 #[async_trait]
 impl ScreenWidget for ConfirmQuitScreen {
     fn title(&self) -> &str {
-        "Confirm Quit"
+        // Remove any title text so the top border is a clean line.
+        ""
     }
 
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
-        // Centered popup ~60% width, 30% height
-        let area = centered_rect(60, 30, size);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Do you really want to quit the Inkan Management Utility? ");
-
-        // Buttons line
-        let space = Span::raw("   ");
-        let (left_l, left_r) = ("[ ", " ]");
-        let (right_l, right_r) = ("[ ", " ]");
-
+        let msg = "Do you really want to quit the Inkan Management Utility?";
         let left_label = "Don't Quit";
         let right_label = "Quit";
 
-        let left = if self.selected == 0 {
+        // Build button spans with selection highlighting.
+        let buttons_len =
+            ("[ ".len() + left_label.len() + " ]".len()) +
+            3 + // gap
+            ("[ ".len() + right_label.len() + " ]".len());
+        let inner_w_needed = std::cmp::max(msg.len(), buttons_len) as u16;
+
+        // Box sizing
+        let inner_width = inner_w_needed.max(36); // minimum pleasant width
+
+        // layout = [blank, message, spacer, buttons]
+        let inner_height = 4;
+
+        let total_w = inner_width + 4; // 2 cols margin + borders
+        let total_h = inner_height + 3; // balanced vertical padding (+ borders)
+
+        let area = centered_rect_abs(total_w, total_h, size);
+
+        // No visible title text (top border stays continuous)
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.title());
+
+        // Inner content area (1 line vertical padding top/bottom)
+        let inner = area.inner(&Margin { horizontal: 2, vertical: 1 });
+
+        // Vertical layout: blank | message | spacer | buttons
+        let vchunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // blank line ABOVE the message
+                Constraint::Length(1), // message
+                Constraint::Length(1), // spacer
+                Constraint::Length(1), // buttons
+            ])
+            .split(inner);
+
+        // Message line (centered)
+        let msg_line = Paragraph::new(Line::from(vec![Span::raw(msg)]))
+            .alignment(Alignment::Center);
+
+        // Buttons line (centered)
+        let left_spans: Vec<Span> = if self.selected == 0 {
             vec![
-                Span::styled(left_l, Style::default().fg(Color::DarkGray)),
-                Span::styled(left_label, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(left_r, Style::default().fg(Color::DarkGray)),
+                Span::styled("[ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    left_label,
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ]", Style::default().fg(Color::DarkGray)),
             ]
         } else {
             vec![
-                Span::styled(left_l, Style::default().fg(Color::DarkGray)),
+                Span::styled("[ ", Style::default().fg(Color::DarkGray)),
                 Span::raw(left_label.to_string()),
-                Span::styled(left_r, Style::default().fg(Color::DarkGray)),
+                Span::styled(" ]", Style::default().fg(Color::DarkGray)),
             ]
         };
 
-        let right = if self.selected == 1 {
+        let right_spans: Vec<Span> = if self.selected == 1 {
             vec![
-                Span::styled(right_l, Style::default().fg(Color::DarkGray)),
-                Span::styled(right_label, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(right_r, Style::default().fg(Color::DarkGray)),
+                Span::styled("[ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    right_label,
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ]", Style::default().fg(Color::DarkGray)),
             ]
         } else {
             vec![
-                Span::styled(right_l, Style::default().fg(Color::DarkGray)),
+                Span::styled("[ ", Style::default().fg(Color::DarkGray)),
                 Span::raw(right_label.to_string()),
-                Span::styled(right_r, Style::default().fg(Color::DarkGray)),
+                Span::styled(" ]", Style::default().fg(Color::DarkGray)),
             ]
         };
 
-        let line = {
-            let mut v = Vec::new();
-            v.extend(left);
-            v.push(space.clone());
-            v.push(space.clone());
-            v.extend(right);
-            Line::from(v)
-        };
+        let mut btn_spans = Vec::new();
+        btn_spans.extend(left_spans);
+        btn_spans.push(Span::raw("   "));
+        btn_spans.extend(right_spans);
 
-        let body = Paragraph::new(line).block(block);
+        let buttons_line = Paragraph::new(Line::from(btn_spans))
+            .alignment(Alignment::Center);
 
+        // Render
         f.render_widget(Clear, area);
-        f.render_widget(body, area);
+        f.render_widget(block, area);
+        // vchunks[0] is the intentional blank line
+        f.render_widget(msg_line, vchunks[1]);
+        f.render_widget(buttons_line, vchunks[3]);
     }
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
@@ -360,7 +408,7 @@ impl MenuItem {
 #[async_trait]
 impl ScreenWidget for MainMenuScreen {
     fn title(&self) -> &str {
-        "Welcome"
+        ""
     }
 
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
@@ -371,14 +419,16 @@ impl ScreenWidget for MainMenuScreen {
                 [
                     Constraint::Length(3),
                     Constraint::Min(5),
-                    Constraint::Length(3), // ensure room for bordered Help
+                    Constraint::Length(3),
                 ]
                 .as_ref(),
             )
             .split(size);
 
-        let header =
-            Paragraph::new("Inkan Management Utility — Menu").block(draw_frame_title(self.title()));
+let header = Paragraph::new("Inkan Management Utility — Main Menu")
+    .alignment(Alignment::Center)
+    .block(draw_frame_title(self.title()));
+
         let items = MenuItem::all();
         let list_items: Vec<ListItem> = items
             .iter()
@@ -395,7 +445,7 @@ impl ScreenWidget for MainMenuScreen {
             .collect();
 
         let list = List::new(list_items)
-            .block(draw_frame_title("Select an action"))
+            .block(Block::default().borders(Borders::ALL))
             .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
         let footer = help_menu();
@@ -407,7 +457,7 @@ impl ScreenWidget for MainMenuScreen {
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
         match k.code {
-            // 'q' here is optional; Ctrl+Q is the global quit. Keeping Enter navigation consistent.
+            // Optional: keep bare 'q'; Ctrl+Q is the global quit
             KeyCode::Char('q') => return Ok(Transition::Quit),
             KeyCode::Up => {
                 if self.menu_index == 0 {
@@ -416,12 +466,14 @@ impl ScreenWidget for MainMenuScreen {
                     self.menu_index -= 1;
                 }
             }
-            KeyCode::Down => self.menu_index = (self.menu_index + 1) % MenuItem::all().len(),
+            KeyCode::Down | KeyCode::Tab => {
+    self.menu_index = (self.menu_index + 1) % MenuItem::all().len();
+            }
             KeyCode::Enter => {
                 return Ok(match MenuItem::all()[self.menu_index] {
                     MenuItem::Keygen => Transition::Push(Box::new(KeygenScreen::new())),
                     MenuItem::BatchSign => Transition::Push(Box::new(BatchScreen::new())),
-                    MenuItem::Quit => Transition::Push(Box::new(ConfirmQuitScreen::new())),
+                    MenuItem::Quit => Transition::Quit, // direct quit, no confirmation
                 })
             }
             _ => {}
@@ -516,7 +568,8 @@ impl ScreenWidget for KeygenScreen {
         match k.code {
             KeyCode::Esc => return Ok(Transition::Pop),
 
-            KeyCode::Up | KeyCode::BackTab => {
+            // Navigation (Up/Down/Tab only; no Shift+Tab)
+            KeyCode::Up => {
                 if self.field_index == 0 {
                     self.field_index = submit_idx;
                 } else {
@@ -526,8 +579,26 @@ impl ScreenWidget for KeygenScreen {
             KeyCode::Down | KeyCode::Tab => {
                 self.field_index = (self.field_index + 1) % (submit_idx + 1);
             }
-            KeyCode::Enter if self.field_index != submit_idx => {
-                self.field_index = (self.field_index + 1) % (submit_idx + 1);
+
+            // Enter ONLY submits when on [Submit]
+            KeyCode::Enter if self.field_index == submit_idx => {
+                let count: u32 = self
+                    .count
+                    .text
+                    .trim()
+                    .parse()
+                    .map_err(|_| anyhow!("Count must be a positive integer"))?;
+                let records = commands::keygen::generate(count)?;
+                if self.save_to_file {
+                    let p = self.out_path.text.trim();
+                    commands::keygen::emit(records, Some(p.into()))
+                        .with_context(|| format!("writing {}", p))?;
+                    ctx.result_text = format!("✓ Wrote {}", p);
+                } else {
+                    let json = serde_json::to_string_pretty(&records)?;
+                    ctx.result_text = json;
+                }
+                return Ok(Transition::Push(Box::new(ResultScreen::default())));
             }
 
             // Checkbox toggle: Space or Left/Right only
@@ -539,25 +610,19 @@ impl ScreenWidget for KeygenScreen {
             KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
                 if self.is_text_field(self.field_index) =>
             {
-                match k.code {
-                    KeyCode::Left => match self.field_index {
-                        0 => self.count.move_left(),
-                        2 => self.out_path.move_left(),
+                match self.field_index {
+                    0 => match k.code {
+                        KeyCode::Left => self.count.move_left(),
+                        KeyCode::Right => self.count.move_right(),
+                        KeyCode::Home => self.count.home(),
+                        KeyCode::End => self.count.end(),
                         _ => {}
                     },
-                    KeyCode::Right => match self.field_index {
-                        0 => self.count.move_right(),
-                        2 => self.out_path.move_right(),
-                        _ => {}
-                    },
-                    KeyCode::Home => match self.field_index {
-                        0 => self.count.home(),
-                        2 => self.out_path.home(),
-                        _ => {}
-                    },
-                    KeyCode::End => match self.field_index {
-                        0 => self.count.end(),
-                        2 => self.out_path.end(),
+                    2 => match k.code {
+                        KeyCode::Left => self.out_path.move_left(),
+                        KeyCode::Right => self.out_path.move_right(),
+                        KeyCode::Home => self.out_path.home(),
+                        KeyCode::End => self.out_path.end(),
                         _ => {}
                     },
                     _ => {}
@@ -583,27 +648,6 @@ impl ScreenWidget for KeygenScreen {
                     2 => self.out_path.insert_char(c),
                     _ => {}
                 }
-            }
-
-            // Submit
-            KeyCode::Enter if self.field_index == submit_idx => {
-                let count: u32 = self
-                    .count
-                    .text
-                    .trim()
-                    .parse()
-                    .map_err(|_| anyhow!("Count must be a positive integer"))?;
-                let records = commands::keygen::generate(count)?;
-                if self.save_to_file {
-                    let p = self.out_path.text.trim();
-                    commands::keygen::emit(records, Some(p.into()))
-                        .with_context(|| format!("writing {}", p))?;
-                    ctx.result_text = format!("✓ Wrote {}", p);
-                } else {
-                    let json = serde_json::to_string_pretty(&records)?;
-                    ctx.result_text = json;
-                }
-                return Ok(Transition::Push(Box::new(ResultScreen::default())));
             }
 
             _ => {}
@@ -710,8 +754,8 @@ impl ScreenWidget for BatchScreen {
         match k.code {
             KeyCode::Esc => return Ok(Transition::Pop),
 
-            // Navigation
-            KeyCode::Up | KeyCode::BackTab => {
+            // Navigation (Up/Down/Tab only; no Shift+Tab)
+            KeyCode::Up => {
                 if self.field_index == 0 {
                     self.field_index = 5;
                 } else {
@@ -721,27 +765,8 @@ impl ScreenWidget for BatchScreen {
             KeyCode::Down | KeyCode::Tab => {
                 self.field_index = (self.field_index + 1) % 6;
             }
-            // Enter = Next field (unless on Submit)
-            KeyCode::Enter if self.field_index != 5 => {
-                self.field_index = (self.field_index + 1) % 6;
-            }
 
-            // Cursor movement within text fields
-            KeyCode::Left if self.is_text() => self.tf_mut(self.field_index).move_left(),
-            KeyCode::Right if self.is_text() => self.tf_mut(self.field_index).move_right(),
-            KeyCode::Home if self.is_text() => self.tf_mut(self.field_index).home(),
-            KeyCode::End if self.is_text() => self.tf_mut(self.field_index).end(),
-
-            // Editing
-            KeyCode::Backspace if self.is_text() => self.tf_mut(self.field_index).backspace(),
-            KeyCode::Delete if self.is_text() => self.tf_mut(self.field_index).delete(),
-            KeyCode::Char(c)
-                if self.is_text() && !k.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.tf_mut(self.field_index).insert_char(c)
-            }
-
-            // Submit
+            // Enter ONLY submits when on [Submit]
             KeyCode::Enter if self.field_index == 5 => {
                 let batch_path = self.batch_path.text.trim().to_string();
                 let out_path = self.out_path.text.trim().to_string();
@@ -777,6 +802,21 @@ impl ScreenWidget for BatchScreen {
 
                 ctx.result_text = format!("✓ Wrote {}", out_path);
                 return Ok(Transition::Push(Box::new(ResultScreen::default())));
+            }
+
+            // Cursor movement within text fields
+            KeyCode::Left if self.is_text() => self.tf_mut(self.field_index).move_left(),
+            KeyCode::Right if self.is_text() => self.tf_mut(self.field_index).move_right(),
+            KeyCode::Home if self.is_text() => self.tf_mut(self.field_index).home(),
+            KeyCode::End if self.is_text() => self.tf_mut(self.field_index).end(),
+
+            // Editing
+            KeyCode::Backspace if self.is_text() => self.tf_mut(self.field_index).backspace(),
+            KeyCode::Delete if self.is_text() => self.tf_mut(self.field_index).delete(),
+            KeyCode::Char(c)
+                if self.is_text() && !k.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.tf_mut(self.field_index).insert_char(c)
             }
 
             _ => {}
