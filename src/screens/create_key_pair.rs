@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result}; // UPDATED
 use async_trait::async_trait;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -10,12 +10,19 @@ use ratatui::{
 };
 use textwrap::wrap;
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
 use crate::ui::style::{span_key, span_sep, span_text, button_spans};
 use crate::ui::common_nav::esc_to_back;
 use crate::ui::components::{TextField, field_line_text};
 use crate::defaults::Defaults;
+
+// NEW: wire to your existing commands
+use crate::commands::keygen;
+use crate::commands::key_save::{emit_encrypted_one_modern, emit_encrypted_one_pgp, EncryptedSaveOptions};
 
 const CURSOR_BLOCK: &str = "█";
 
@@ -122,10 +129,10 @@ impl CreateKeyPairScreen {
         Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
     }
 
-    // One horizontal line: < Submit >   < Cancel >
+    // One horizontal line: < Create Key Pair >   < Cancel >
     fn buttons_line(submit_selected: bool, cancel_selected: bool) -> Line<'static> {
         let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(button_spans("Submit", submit_selected));
+        spans.extend(button_spans("Create Key Pair", submit_selected));
         spans.push(Span::raw("   "));
         spans.extend(button_spans("Cancel", cancel_selected));
         Line::from(spans)
@@ -222,7 +229,7 @@ impl ScreenWidget for CreateKeyPairScreen {
         f.render_widget(Paragraph::new(footer_line).wrap(Wrap { trim: true }), regions.bottom_inner);
     }
 
-    async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
+    async fn on_key(&mut self, k: KeyEvent, ctx: &mut AppCtx) -> Result<Transition> {
         if let Some(t) = esc_to_back(k) {
             return Ok(t); // Esc -> Back
         }
@@ -244,8 +251,70 @@ impl ScreenWidget for CreateKeyPairScreen {
 
             // Enter on buttons
             KeyCode::Enter if self.field_index == 6 => {
-                // Submit action (wire up later)
-                return Ok(Transition::Stay);
+                // === SUBMIT: create + encrypt + save ===
+                let nickname = self.nickname.text.trim();
+                if nickname.is_empty() {
+                    ctx.result_text = "Error: Key Pair Name cannot be empty.".to_string();
+                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                }
+
+                let pwd = self.password.text.clone();
+                let confirm = self.confirm.text.clone();
+                if pwd != confirm {
+                    ctx.result_text = "Error: Password and Confirm Password do not match.".to_string();
+                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                }
+                if pwd.is_empty() {
+                    ctx.result_text = "Error: Password cannot be empty.".to_string();
+                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                }
+
+                let out_dir = self.out_dir.text.trim();
+                if out_dir.is_empty() {
+                    ctx.result_text = "Error: Output Directory cannot be empty.".to_string();
+                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                }
+
+                // Ensure directory exists
+                let out_dir_path = PathBuf::from(out_dir);
+                fs::create_dir_all(&out_dir_path)
+                    .with_context(|| format!("creating directory {}", out_dir_path.display()))?;
+
+                // Generate exactly one KeyRecord
+                let rec = {
+                    let v = keygen::generate(1).with_context(|| "generating keypair")?;
+                    v.into_iter().next().ok_or_else(|| anyhow!("internal: expected one key"))?
+                };
+
+                // Build file path: "<out_dir>/<sanitized-nickname>.<ext>"
+                let ext = if self.format_modern { "inkan" } else { "pgp" };
+                let filename = format!("{}.{}", sanitize_filename(nickname), ext);
+                let file_path = out_dir_path.join(filename);
+
+                // Password bytes (will be zeroized by savers)
+                let mut password_utf8 = pwd.into_bytes();
+
+                // Encrypt & save
+                if self.format_modern {
+                    // Tune Argon2 here if desired (dev vs prod presets)
+                    let opts = EncryptedSaveOptions {
+                        out_path: file_path.to_str().ok_or_else(|| anyhow!("invalid output path"))?,
+                        nickname,
+                        password_utf8: &mut password_utf8,
+                        argon_t_cost: 3,
+                        argon_m_cost_kib: 262_144, // 256 MiB
+                        argon_p_cost: 1,
+                        add_noise_prefix: true,
+                    };
+                    emit_encrypted_one_modern(&rec, opts)
+                        .with_context(|| format!("writing {}", file_path.display()))?;
+                } else {
+                    emit_encrypted_one_pgp(&rec, file_path.to_str().ok_or_else(|| anyhow!("invalid output path"))?, nickname, &mut password_utf8)
+                        .with_context(|| format!("writing {}", file_path.display()))?;
+                }
+
+                ctx.result_text = format!("✓ Created and saved encrypted key file:\n{}", file_path.display());
+                return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
             }
             KeyCode::Enter if self.field_index == 7 => {
                 return Ok(Transition::Pop);
@@ -290,4 +359,18 @@ fn split_at_char(s: &str, idx: usize) -> (&str, &str) {
     if idx >= count { return (s, ""); }
     let split = s.char_indices().nth(idx).map(|(i, _)| i).unwrap_or_else(|| s.len());
     (&s[..split], &s[split..])
+}
+
+// Simple filesystem-safe name (keeps ASCII letters, numbers, '-', '_', '.')
+fn sanitize_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            out.push('_');
+        }
+        // drop everything else
+    }
+    if out.is_empty() { "keypair".to_string() } else { out }
 }

@@ -10,13 +10,42 @@ hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
+
+# Ethereum / signing
 ethers-core = "2"
 ethers-signers = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
-rand_core = "0.6"
-bech32 = "0.9"
+
+# Async/runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# TUI
 ratatui = "0.26"
 crossterm = "0.27"
-async-trait = "0.1"
 textwrap = "0.16"
+
+# Nostr bech32 ids (npub/nsec)
+bech32 = "0.9"
+
+# Randomness
+rand = "0.8"
+rand_chacha = "0.3"
+rand_core = "0.6"
+
+# Crypto for modern format
+argon2 = "0.5"
+password-hash = "0.5"
+chacha20poly1305 = "0.10"
+secp256k1 = { version = "0.28", features = ["rand"] }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+sha2 = "0.10"
+
+# Time formatting
+time = { version = "0.3", features = ["formatting"] }
+
+# OpenPGP compatibility path (AEAD/OCB) via Sequoia (no external gpg)
+# Pure-Rust backend, acknowledging variable-time crypto (safe for offline/local use)
+sequoia-openpgp = { version = "1", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+
+# Optional: if you use async traits anywhere
+async-trait = "0.1"

@@ -1,0 +1,8 @@
+{
+  "key_pair_nickname": "HelloWorldPGP",
+  "private_key_hex": "374512c642538573579e1df6c89b2421dce50dde075d4936b19ac2b0156d4caa",
+  "private_key_nsec": "nsec1xaz393jz2wzhx4u7rhmv3xeyy8ww2rw7qaw5jd43ntptq9tdfj4qt6fstn",
+  "public_key_hex_uncompressed": "047652bb4deadd011bcd66eb42a5aac7e6e6c8df9c1f71cc4f87e7feaf30c0e6a7713ae9a868a5d26d912bc1092489b09ff84f14ecedcbdd9e64f3d71a56e4db17",
+  "public_key_compressed": "037652bb4deadd011bcd66eb42a5aac7e6e6c8df9c1f71cc4f87e7feaf30c0e6a7",
+  "public_key_npub": "npub1weftkn02m5q3hntxadp2t2k8umnv3huuracucnu8ull27vxqu6nskn7n3d"
+}

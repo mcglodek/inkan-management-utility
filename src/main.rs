@@ -15,8 +15,10 @@ mod key;
 mod encoding;
 mod decoder;
 
+// NEW: bring in src/crypto/{mod.rs,modern.rs,pgp.rs,nostr_utils.rs}
+mod crypto;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     app::run_menu().await
 }
-
