@@ -28,6 +28,7 @@ decrypted_files
 X-temporaryTestFilesGitIgnored/
 inputFiles/
 input_files/
+generated_transactions/
 
 # OS junk
 .DS_Store
