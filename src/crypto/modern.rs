@@ -7,8 +7,10 @@ use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use secp256k1::{PublicKey, SecretKey};
 use serde::Serialize;
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
 const VERSION: u8 = 1;
@@ -39,11 +41,40 @@ struct OrderedPayload<'a> {
     public_key_npub: String,
 }
 
+/// Create a file with a unique name, avoiding overwrite by appending " (1)", " (2)", ...
+fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, PathBuf)> {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    for i in 0..10_000 {
+        let candidate_name = if i == 0 {
+            if ext.is_empty() { stem.to_string() } else { format!("{stem}.{ext}") }
+        } else {
+            if ext.is_empty() { format!("{stem} ({i})") } else { format!("{stem} ({i}).{ext}") }
+        };
+        let path = base_dir.join(&candidate_name);
+
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(f) => return Ok((f, path)),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(io_err("failed to create a unique filename after many attempts"))
+}
+
 /// Encrypts and writes a **single** private key (hex, no `0x`) to file using the neutral header.
 /// Recomputes all public forms from the private key to ensure internal consistency.
 pub fn save_modern_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
-    opts: ModernOptions<'_>,
+    mut opts: ModernOptions<'_>,
 ) -> io::Result<()> {
     // 1) Decode privkey (32 bytes)
     let sk_bytes_vec = hex::decode(privkey_hex_no0x)
@@ -88,11 +119,10 @@ pub fn save_modern_encrypted_from_privkey_hex(
             .expect("argon2 params"),
     ).expect("argon2 ctor");
 
-let mut key = [0u8; 32];
-argon
-    .hash_password_into(opts.password_utf8, &salt, &mut key)
-    .map_err(|e| io_err(format!("Argon2 error: {e}")))?;
-
+    let mut key = [0u8; 32];
+    argon
+        .hash_password_into(opts.password_utf8, &salt, &mut key)
+        .map_err(|e| io_err(format!("Argon2 error: {e}")))?;
 
     // 5) Nonce and header
     let mut nonce = [0u8; 24];
@@ -112,15 +142,15 @@ argon
         header.extend_from_slice(&noise);
     }
 
-    header.push(VERSION);                                    // u8
-    header.push(KDF_ID_ARGON2ID);                            // u8
-    header.extend_from_slice(&opts.t_cost.to_le_bytes());    // u32
+    header.push(VERSION);                                     // u8
+    header.push(KDF_ID_ARGON2ID);                             // u8
+    header.extend_from_slice(&opts.t_cost.to_le_bytes());     // u32
     header.extend_from_slice(&opts.m_cost_kib.to_le_bytes()); // u32
-    header.push(opts.p_cost);                                 // u8
-    header.push(salt.len() as u8);                            // u8
-    header.extend_from_slice(&salt);                          // salt
-    header.push(nonce.len() as u8);                           // u8
-    header.extend_from_slice(&nonce);                         // nonce
+    header.push(opts.p_cost);                                  // u8
+    header.push(salt.len() as u8);                             // u8
+    header.extend_from_slice(&salt);                           // salt
+    header.push(nonce.len() as u8);                            // u8
+    header.extend_from_slice(&nonce);                          // nonce
 
     // 6) Encrypt (AAD = header)
     let cipher = XChaCha20Poly1305::new((&key).into());
@@ -128,46 +158,40 @@ argon
         .encrypt((&nonce).into(), Payload { aad: &header, msg: payload_pretty.as_bytes() })
         .map_err(|e| io_err(format!("encrypt error: {e}")))?;
 
-// 7) Build filename and write file: [header || ciphertext]
-use std::fs;
-use std::path::{Path, PathBuf};
+    // 7) Resolve output path & write file: [header || ciphertext] with unique filename
+    // sanitize nickname
+    let safe_nickname = {
+        let s: String = opts
+            .key_pair_nickname
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if s.is_empty() { "Keypair".to_string() } else { s }
+    };
 
-// sanitize nickname
-let safe_nickname = {
-    let s: String = opts
-        .key_pair_nickname
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
-    if s.is_empty() { "Keypair".to_string() } else { s }
-};
+    // decide base directory even if a file path was provided
+    let provided = Path::new(opts.file_path);
+    let base_dir: PathBuf = if provided.is_dir() {
+        provided.to_path_buf()
+    } else if let Some(parent) = provided.parent() {
+        parent.to_path_buf()
+    } else {
+        PathBuf::from(".")
+    };
 
-// decide base directory even if a file path was provided
-let provided = Path::new(opts.file_path);
-let base_dir: PathBuf = if provided.is_dir() {
-    provided.to_path_buf()
-} else if let Some(parent) = provided.parent() {
-    parent.to_path_buf()
-} else {
-    PathBuf::from(".")
-};
+    // ensure directory exists
+    fs::create_dir_all(&base_dir)
+        .map_err(|e| io_err(format!("create dir {}: {e}", base_dir.display())))?;
 
-// ensure directory exists
-fs::create_dir_all(&base_dir)
-    .map_err(|e| io_err(format!("create dir {}: {e}", base_dir.display())))?;
+    // standardized filename; uniqueness handled by create_unique_file()
+    let base_filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.enc", safe_nickname);
 
-// enforce standardized filename + .enc extension
-let filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.enc", safe_nickname);
-let out_path = base_dir.join(filename);
-
-// write file
-let f = File::create(&out_path)?;
-let mut w = BufWriter::new(f);
-w.write_all(&header)?;
-w.write_all(&ciphertext)?;
-w.flush()?;
-
-
+    // open a uniquely named file (no overwrite)
+    let (f, _final_path) = create_unique_file(&base_dir, &base_filename)?;
+    let mut w = BufWriter::new(f);
+    w.write_all(&header)?;
+    w.write_all(&ciphertext)?;
+    w.flush()?;
 
     // 8) Zeroize sensitive buffers
     key.zeroize();
@@ -181,4 +205,3 @@ w.flush()?;
 fn io_err<M: Into<String>>(msg: M) -> io::Error {
     io::Error::new(io::ErrorKind::Other, msg.into())
 }
-

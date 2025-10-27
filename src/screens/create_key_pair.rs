@@ -33,7 +33,7 @@ pub struct CreateKeyPairScreen {
     password: TextField,
     confirm: TextField,
     out_dir: TextField,
-    format_modern: bool,    // true = Argon2id + XChaCha20-Poly1305, false = OpenPGP AEAD
+    format_modern: bool,    // true = Argon2id + XChaCha20-Poly1305, false = OpenPGP
     show_password: bool,    // NEW: show/hide password fields
 }
 
@@ -104,7 +104,7 @@ impl CreateKeyPairScreen {
     // Encryption Method line with yellow label and cyan value when focused.
     fn encryption_method_line(&self, selected: bool) -> Line<'static> {
         let label_span = Span::styled("Encryption Method: ", Style::default().fg(Color::Yellow));
-        let val = if self.format_modern { "Argon2id + XChaCha20-Poly1305" } else { "OpenPGP AEAD" };
+        let val = if self.format_modern { "Argon2id + XChaCha20-Poly1305" } else { "OpenPGP" };
 
         let val_style = if selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
@@ -148,7 +148,7 @@ impl ScreenWidget for CreateKeyPairScreen {
         let explanation_paras = [
             "Generate a new offline Inkan key pair and save it as an encrypted file.",
             "Fill in the fields below. Password must be entered twice. Choose the output directory.",
-            "You can choose between Argon2id + XChaCha20-Poly1305 and OpenPGP AEAD encryption.",
+            "You can choose between Argon2id + XChaCha20-Poly1305 and OpenPGP encryption.",
         ];
 
         // === TOP BOX ===
