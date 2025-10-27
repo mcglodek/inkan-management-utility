@@ -11,7 +11,7 @@ use ratatui::{
 use textwrap::wrap;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
@@ -20,9 +20,12 @@ use crate::ui::common_nav::esc_to_back;
 use crate::ui::components::{TextField, field_line_text};
 use crate::defaults::Defaults;
 
-// NEW: wire to your existing commands
+// Commands
 use crate::commands::keygen;
 use crate::commands::key_save::{emit_encrypted_one_modern, emit_encrypted_one_pgp, EncryptedSaveOptions};
+
+// Generic OK-only modal (success & errors)
+use crate::screens::{ConfirmOkScreen, AfterOk};
 
 const CURSOR_BLOCK: &str = "█";
 
@@ -69,63 +72,41 @@ impl CreateKeyPairScreen {
     }
 
     // Password field that visually matches field_line_text (yellow label and SAME cursor behavior/color).
-    // FIX: convert the cursor from char index -> byte index for the temporary TextField to avoid UTF-8 boundary panics.
+    // Convert the cursor from char index -> byte index for the temporary TextField to avoid UTF-8 boundary panics.
     fn field_line_password(label: &str, tf: &TextField, selected: bool, show: bool) -> Line<'static> {
-        // Determine the text to render (masked or plain)
-        let render = if show {
-            tf.text.clone()
-        } else {
-            "•".repeat(tf.text.chars().count())
-        };
+        let render = if show { tf.text.clone() } else { "•".repeat(tf.text.chars().count()) };
 
-        // Build a temporary TextField with the rendered text and a BYTE-INDEX cursor
         let mut tmp = TextField::with(&render);
-
-        // Clamp the original cursor as a CHAR index to the rendered length
         let cursor_chars = tf.cursor.min(render.chars().count());
-
-        // Convert char index -> byte index safely
         let cursor_bytes = if cursor_chars == 0 {
             0
         } else {
-            render
-                .char_indices()
-                .nth(cursor_chars)
-                .map(|(i, _)| i)
-                .unwrap_or_else(|| render.len())
+            render.char_indices().nth(cursor_chars).map(|(i, _)| i).unwrap_or_else(|| render.len())
         };
-
         tmp.cursor = cursor_bytes;
 
-        // Delegate to the shared renderer so the cursor looks/behaves exactly like in "Key Pair Name"
         field_line_text(label, &tmp, selected)
     }
 
-    // Encryption Method line with yellow label and cyan value when focused.
     fn encryption_method_line(&self, selected: bool) -> Line<'static> {
         let label_span = Span::styled("Encryption Method: ", Style::default().fg(Color::Yellow));
         let val = if self.format_modern { "Argon2id + XChaCha20-Poly1305" } else { "OpenPGP" };
-
         let val_style = if selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
-
         Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
     }
 
-    // NEW: Show Password toggle line (yellow label; cyan + bold value when focused).
     fn show_password_line(&self, selected: bool) -> Line<'static> {
         let label_span = Span::styled("Show Password: ", Style::default().fg(Color::Yellow));
         let val = if self.show_password { "On" } else { "Off" };
-
         let val_style = if selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
-
         Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
     }
 
@@ -229,7 +210,7 @@ impl ScreenWidget for CreateKeyPairScreen {
         f.render_widget(Paragraph::new(footer_line).wrap(Wrap { trim: true }), regions.bottom_inner);
     }
 
-    async fn on_key(&mut self, k: KeyEvent, ctx: &mut AppCtx) -> Result<Transition> {
+    async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
         if let Some(t) = esc_to_back(k) {
             return Ok(t); // Esc -> Back
         }
@@ -254,25 +235,33 @@ impl ScreenWidget for CreateKeyPairScreen {
                 // === SUBMIT: create + encrypt + save ===
                 let nickname = self.nickname.text.trim();
                 if nickname.is_empty() {
-                    ctx.result_text = "Error: Key Pair Name cannot be empty.".to_string();
-                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                    return Ok(Transition::Push(Box::new(
+                        ConfirmOkScreen::new("Error: Key Pair Name cannot be empty.")
+                            .with_after_ok(AfterOk::Pop)
+                    )));
                 }
 
                 let pwd = self.password.text.clone();
                 let confirm = self.confirm.text.clone();
                 if pwd != confirm {
-                    ctx.result_text = "Error: Password and Confirm Password do not match.".to_string();
-                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                    return Ok(Transition::Push(Box::new(
+                        ConfirmOkScreen::new("Error: Password and Confirm Password do not match.")
+                            .with_after_ok(AfterOk::Pop)
+                    )));
                 }
                 if pwd.is_empty() {
-                    ctx.result_text = "Error: Password cannot be empty.".to_string();
-                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                    return Ok(Transition::Push(Box::new(
+                        ConfirmOkScreen::new("Error: Password cannot be empty.")
+                            .with_after_ok(AfterOk::Pop)
+                    )));
                 }
 
                 let out_dir = self.out_dir.text.trim();
                 if out_dir.is_empty() {
-                    ctx.result_text = "Error: Output Directory cannot be empty.".to_string();
-                    return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                    return Ok(Transition::Push(Box::new(
+                        ConfirmOkScreen::new("Error: Output Directory cannot be empty.")
+                            .with_after_ok(AfterOk::Pop)
+                    )));
                 }
 
                 // Ensure directory exists
@@ -294,9 +283,8 @@ impl ScreenWidget for CreateKeyPairScreen {
                 // Password bytes (will be zeroized by savers)
                 let mut password_utf8 = pwd.into_bytes();
 
-                // Encrypt & save
-                if self.format_modern {
-                    // Tune Argon2 here if desired (dev vs prod presets)
+                // Encrypt & save -> get the ACTUAL final path from the emitters
+                let final_path = if self.format_modern {
                     let opts = EncryptedSaveOptions {
                         out_path: file_path.to_str().ok_or_else(|| anyhow!("invalid output path"))?,
                         nickname,
@@ -307,14 +295,25 @@ impl ScreenWidget for CreateKeyPairScreen {
                         add_noise_prefix: true,
                     };
                     emit_encrypted_one_modern(&rec, opts)
-                        .with_context(|| format!("writing {}", file_path.display()))?;
+                        .with_context(|| format!("writing {}", file_path.display()))?
                 } else {
-                    emit_encrypted_one_pgp(&rec, file_path.to_str().ok_or_else(|| anyhow!("invalid output path"))?, nickname, &mut password_utf8)
-                        .with_context(|| format!("writing {}", file_path.display()))?;
-                }
+                    emit_encrypted_one_pgp(
+                        &rec,
+                        file_path.to_str().ok_or_else(|| anyhow!("invalid output path"))?,
+                        nickname,
+                        &mut password_utf8
+                    ).with_context(|| format!("writing {}", file_path.display()))?
+                };
 
-                ctx.result_text = format!("✓ Created and saved encrypted key file:\n{}", file_path.display());
-                return Ok(Transition::Push(Box::new(crate::screens::ResultScreen::default())));
+                // SUCCESS: show a single OK modal with header, blank line, and the REAL final path.
+                let lines = vec![
+                    "Created and saved key pair in this symmetrically encrypted file:".to_string(),
+                    "".to_string(),
+                    final_path.display().to_string(),
+                ];
+                return Ok(Transition::Push(Box::new(
+                    ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::PopToMainMenu)
+                )));
             }
             KeyCode::Enter if self.field_index == 7 => {
                 return Ok(Transition::Pop);

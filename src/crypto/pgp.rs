@@ -61,12 +61,13 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 
 /// Save as a binary OpenPGP message using symmetric encryption (legacy-compatible).
 /// `privkey_hex_no0x` must be 32-byte hex without `0x`.
+/// RETURNS: PathBuf of the actual file written.
 pub fn save_pgp_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
     nickname: &str,
     password_utf8: &mut Vec<u8>,
     file_path: &str,
-) -> io::Result<()> {
+) -> io::Result<PathBuf> {
     // 1) Decode privkey (32 bytes)
     let sk_bytes_vec = hex::decode(privkey_hex_no0x)
         .map_err(|e| io_err(format!("bad privkey hex: {e}")))?;
@@ -122,8 +123,8 @@ pub fn save_pgp_encrypted_from_privkey_hex(
     // standard base filename (without suffix); uniqueness handled by create_unique_file()
     let base_filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.pgp", safe_nickname);
 
-    // 5) Open a uniquely named file (no overwrite)
-    let (f, _final_path) = create_unique_file(&base_dir, &base_filename)?;
+    // 5) Open a uniquely named file (no overwrite) and remember the final path
+    let (f, final_path) = create_unique_file(&base_dir, &base_filename)?;
     let mut w = BufWriter::new(f);
 
     // 6) Encrypt (legacy-compatible: no explicit AEAD call)
@@ -148,7 +149,8 @@ pub fn save_pgp_encrypted_from_privkey_hex(
     password_utf8.zeroize();
     sk_bytes.zeroize();
 
-    Ok(())
+    // 9) Return the actual final path for UI display
+    Ok(final_path)
 }
 
 fn io_err<M: Into<String>>(msg: M) -> io::Error {

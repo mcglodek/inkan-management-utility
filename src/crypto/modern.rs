@@ -72,10 +72,11 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 
 /// Encrypts and writes a **single** private key (hex, no `0x`) to file using the neutral header.
 /// Recomputes all public forms from the private key to ensure internal consistency.
+/// RETURNS: PathBuf of the actual file written.
 pub fn save_modern_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
-    mut opts: ModernOptions<'_>,
-) -> io::Result<()> {
+    opts: ModernOptions<'_>,
+) -> io::Result<PathBuf> {
     // 1) Decode privkey (32 bytes)
     let sk_bytes_vec = hex::decode(privkey_hex_no0x)
         .map_err(|e| io_err(format!("bad privkey hex: {e}")))?;
@@ -186,8 +187,8 @@ pub fn save_modern_encrypted_from_privkey_hex(
     // standardized filename; uniqueness handled by create_unique_file()
     let base_filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.enc", safe_nickname);
 
-    // open a uniquely named file (no overwrite)
-    let (f, _final_path) = create_unique_file(&base_dir, &base_filename)?;
+    // open a uniquely named file (no overwrite) and remember the final path
+    let (f, final_path) = create_unique_file(&base_dir, &base_filename)?;
     let mut w = BufWriter::new(f);
     w.write_all(&header)?;
     w.write_all(&ciphertext)?;
@@ -199,7 +200,8 @@ pub fn save_modern_encrypted_from_privkey_hex(
     opts.password_utf8.zeroize();
     sk_bytes.zeroize();
 
-    Ok(())
+    // 9) Return the actual final path for UI display
+    Ok(final_path)
 }
 
 fn io_err<M: Into<String>>(msg: M) -> io::Error {

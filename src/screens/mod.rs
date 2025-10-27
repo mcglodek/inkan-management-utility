@@ -17,6 +17,8 @@ pub mod create_revocation;
 pub mod create_redelegation;
 pub mod create_permanent_invalidation;
 
+
+
 // Re-exports (so callers can use crate::screens::XxxScreen)
 pub use main_menu::MainMenuScreen;
 pub use keygen::KeygenScreen;
@@ -33,3 +35,8 @@ pub use create_delegation::CreateDelegationScreen;
 pub use create_revocation::CreateRevocationScreen;
 pub use create_redelegation::CreateRedelegationScreen;
 pub use create_permanent_invalidation::CreatePermanentInvalidationScreen;
+
+// Re-export the confirmation screen type
+
+pub mod confirm_ok;
+pub use confirm_ok::{ConfirmOkScreen, AfterOk};
