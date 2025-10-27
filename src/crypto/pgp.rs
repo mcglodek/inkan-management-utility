@@ -10,6 +10,8 @@ use sequoia_openpgp as openpgp;
 use openpgp::crypto::Password;
 use openpgp::serialize::stream::{Encryptor2, LiteralWriter, Message};
 use openpgp::types::SymmetricAlgorithm;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 struct OrderedPayload<'a> {
@@ -59,8 +61,39 @@ pub fn save_pgp_encrypted_from_privkey_hex(
     let data = serde_json::to_vec_pretty(&payload).expect("serialize payload");
 
     // 4) Build OpenPGP symmetric message (Sequoia chooses modern packet formats).
-    let f = File::create(file_path)?;
-    let mut w = BufWriter::new(f);
+
+
+// sanitize nickname
+let safe_nickname = {
+    let s: String = nickname
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if s.is_empty() { "Keypair".to_string() } else { s }
+};
+
+// decide base directory even if a file path was provided
+let provided = Path::new(file_path);
+let base_dir: PathBuf = if provided.is_dir() {
+    provided.to_path_buf()
+} else if let Some(parent) = provided.parent() {
+    parent.to_path_buf()
+} else {
+    PathBuf::from(".")
+};
+
+// ensure directory exists
+fs::create_dir_all(&base_dir)
+    .map_err(|e| io_err(format!("create dir {}: {e}", base_dir.display())))?;
+
+// enforce standardized filename + .pgp extension
+let filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.pgp", safe_nickname);
+let out_path = base_dir.join(filename);
+
+// open file
+let f = File::create(&out_path)?;
+let mut w = BufWriter::new(f);
+
 
     let pass = Password::from(password_utf8.clone());
 

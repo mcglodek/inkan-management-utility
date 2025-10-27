@@ -21,6 +21,7 @@ dist/
 build/
 out/
 outputFiles/
+generated_private_keys/
 
 # Temporary test scripts
 X-temporaryTestFilesGitIgnored/

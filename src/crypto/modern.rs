@@ -128,12 +128,46 @@ argon
         .encrypt((&nonce).into(), Payload { aad: &header, msg: payload_pretty.as_bytes() })
         .map_err(|e| io_err(format!("encrypt error: {e}")))?;
 
-    // 7) Write file: [header || ciphertext]
-    let f = File::create(opts.file_path)?;
-    let mut w = BufWriter::new(f);
-    w.write_all(&header)?;
-    w.write_all(&ciphertext)?;
-    w.flush()?;
+// 7) Build filename and write file: [header || ciphertext]
+use std::fs;
+use std::path::{Path, PathBuf};
+
+// sanitize nickname
+let safe_nickname = {
+    let s: String = opts
+        .key_pair_nickname
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if s.is_empty() { "Keypair".to_string() } else { s }
+};
+
+// decide base directory even if a file path was provided
+let provided = Path::new(opts.file_path);
+let base_dir: PathBuf = if provided.is_dir() {
+    provided.to_path_buf()
+} else if let Some(parent) = provided.parent() {
+    parent.to_path_buf()
+} else {
+    PathBuf::from(".")
+};
+
+// ensure directory exists
+fs::create_dir_all(&base_dir)
+    .map_err(|e| io_err(format!("create dir {}: {e}", base_dir.display())))?;
+
+// enforce standardized filename + .enc extension
+let filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.enc", safe_nickname);
+let out_path = base_dir.join(filename);
+
+// write file
+let f = File::create(&out_path)?;
+let mut w = BufWriter::new(f);
+w.write_all(&header)?;
+w.write_all(&ciphertext)?;
+w.flush()?;
+
+
 
     // 8) Zeroize sensitive buffers
     key.zeroize();
