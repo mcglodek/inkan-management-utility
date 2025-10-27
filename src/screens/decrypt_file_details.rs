@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -11,7 +11,7 @@ use ratatui::{
 use textwrap::wrap;
 
 use std::fs;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
@@ -19,33 +19,33 @@ use crate::ui::style::{span_key, span_sep, span_text, button_spans};
 use crate::ui::common_nav::esc_to_back;
 use crate::ui::components::{TextField, field_line_text};
 use crate::screens::{ConfirmOkScreen, AfterOk};
+use crate::commands::decrypt_auto::decrypt_auto;
+use crate::defaults::Defaults;
+
 
 pub struct DecryptFileDetailsScreen {
-    // indices: 0 password, 1 show pwd toggle, 2 out dir, 3 method toggle, 4 submit, 5 cancel
+    // indices: 0 password, 1 show pwd toggle, 2 out dir, 3 submit, 4 cancel
     field_index: usize,
     input_path: PathBuf,
     password: TextField,
     out_dir: TextField,
     show_password: bool,
-    format_modern: bool,
 }
 
 impl DecryptFileDetailsScreen {
     pub fn new(input_path: PathBuf) -> Self {
-        let default_out_dir = input_path.parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string());
+        // Instead of deriving from the input path, always start from the central default.
+        let default_out_dir = Defaults::DECRYPT_OUTPUT_DIR.to_string();
 
-        let mut s = Self {
+        Self {
             field_index: 0,
             input_path,
             password: TextField::with(""),
             out_dir: TextField::with(&default_out_dir),
             show_password: false,
-            format_modern: true,
-        };
-        s
+        }
     }
+
 
     fn is_text(&self) -> bool { matches!(self.field_index, 0 | 2) }
 
@@ -68,17 +68,6 @@ impl DecryptFileDetailsScreen {
         field_line_text(label, &tmp, selected)
     }
 
-    fn decryption_method_line(&self, selected: bool) -> Line<'static> {
-        let label_span = Span::styled("Decryption Method: ", Style::default().fg(Color::Yellow));
-        let val = if self.format_modern { "Argon2id + XChaCha20-Poly1305" } else { "OpenPGP" };
-        let val_style = if selected {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
-    }
-
     fn show_password_line(&self, selected: bool) -> Line<'static> {
         let label_span = Span::styled("Show Password: ", Style::default().fg(Color::Yellow));
         let val = if self.show_password { "On" } else { "Off" };
@@ -96,13 +85,6 @@ impl DecryptFileDetailsScreen {
         spans.push(Span::raw("   "));
         spans.extend(button_spans("Cancel", cancel_selected));
         Line::from(spans)
-    }
-
-    fn derive_output_path(&self) -> PathBuf {
-        // Keep file name but replace extension with ".decrypted.json" as a placeholder
-        let stem = self.input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("decrypted");
-        let out_name = format!("{}.decrypted.json", stem);
-        PathBuf::from(self.out_dir.text.trim()).join(out_name)
     }
 }
 
@@ -126,8 +108,8 @@ impl ScreenWidget for DecryptFileDetailsScreen {
         let explanation_lines = exp_lines as u16 + (explanation_paras.len().saturating_sub(1) as u16);
         let top_needed = 2 + 2 + header_lines + 1 + explanation_lines;
 
-        // Middle rows: password + show + outdir + method + spacer + buttons + top spacer
-        let middle_rows: u16 = 6 + 1;
+        // Middle rows: spacer + password + show + outdir + spacer + buttons
+        let middle_rows: u16 = 5 + 1;
         let middle_needed = 2 + 2 + middle_rows;
 
         let footer_height = 3;
@@ -163,13 +145,12 @@ impl ScreenWidget for DecryptFileDetailsScreen {
         lines.push(Self::field_line_password("Password", &self.password, self.field_index == 0, self.show_password));
         lines.push(self.show_password_line(self.field_index == 1));
         lines.push(field_line_text("Output Directory", &self.out_dir, self.field_index == 2));
-        lines.push(self.decryption_method_line(self.field_index == 3));
         lines.push(Line::from(""));
-        lines.push(Self::buttons_line(self.field_index == 4, self.field_index == 5));
+        lines.push(Self::buttons_line(self.field_index == 3, self.field_index == 4));
 
         f.render_widget(Paragraph::new(lines), regions.middle_inner);
 
-        // FOOTER legend
+        // FOOTER legend (keep Toggle for Show Password)
         f.render_widget(Block::default().borders(Borders::ALL), regions.bottom);
         let footer_line = Line::from(vec![
             span_key("↑/↓/Tab"), span_text(" Navigate"), span_sep(),
@@ -193,14 +174,14 @@ impl ScreenWidget for DecryptFileDetailsScreen {
         match k.code {
             // Navigation
             KeyCode::Up => {
-                if self.field_index == 0 { self.field_index = 5; } else { self.field_index -= 1; }
+                if self.field_index == 0 { self.field_index = 4; } else { self.field_index -= 1; }
             }
             KeyCode::Down | KeyCode::Tab => {
-                self.field_index = (self.field_index + 1) % 6;
+                self.field_index = (self.field_index + 1) % 5;
             }
 
             // Enter on Decrypt
-            KeyCode::Enter if self.field_index == 4 => {
+            KeyCode::Enter if self.field_index == 3 => {
                 let pwd = self.password.text.clone();
                 if pwd.is_empty() {
                     return Ok(Transition::Push(Box::new(
@@ -218,36 +199,34 @@ impl ScreenWidget for DecryptFileDetailsScreen {
                 fs::create_dir_all(&out_dir_path)
                     .with_context(|| format!("creating directory {}", out_dir_path.display()))?;
 
-                // Derive output file path (placeholder)
-                let final_out = self.derive_output_path();
-
-                // TODO: actual decryption logic here, based on self.format_modern:
-                // - Modern: parse header, Argon2id derive, XChaCha20-Poly1305 decrypt, tag verify
-                // - OpenPGP: run symmetric decrypt via your PGP component
-                // let mut password_utf8 = pwd.into_bytes();
-                // decrypt_file(&self.input_path, &mut password_utf8, &final_out, self.format_modern)?;
-
-                let method_label = if self.format_modern { "Argon2id + XChaCha20-Poly1305" } else { "OpenPGP" };
-                let lines = vec![
-                    format!("Decryption ({}):", method_label),
-                    "".to_string(),
-                    "Success (placeholder). Wrote decrypted output to:".to_string(),
-                    final_out.display().to_string(),
-                ];
-                return Ok(Transition::Push(Box::new(
-                    ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::PopToMainMenu)
-                )));
+                // Call the auto-decrypt orchestrator (tries Modern, then OpenPGP)
+                let mut password_utf8 = pwd.into_bytes();
+                match decrypt_auto(&self.input_path, &mut password_utf8, &out_dir_path) {
+                    Ok((method_label, out_path)) => {
+                        let lines = vec![
+                            format!("Decryption successful ({}).", method_label),
+                            "".to_string(),
+                            "Wrote decrypted output to:".to_string(),
+                            out_path.display().to_string(),
+                        ];
+                        return Ok(Transition::Push(Box::new(
+                            ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::PopToMainMenu)
+                        )));
+                    }
+                    Err(e) => {
+                        return Ok(Transition::Push(Box::new(
+                            ConfirmOkScreen::new(&e.to_string()).with_after_ok(AfterOk::Pop)
+                        )));
+                    }
+                }
             }
 
             // Enter on Cancel
-            KeyCode::Enter if self.field_index == 5 => {
+            KeyCode::Enter if self.field_index == 4 => {
                 return Ok(Transition::Pop);
             }
 
-            // Toggles
-            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 3 => {
-                self.format_modern = !self.format_modern;
-            }
+            // Toggle Show Password
             KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 1 => {
                 self.show_password = !self.show_password;
             }
@@ -281,4 +260,3 @@ impl ScreenWidget for DecryptFileDetailsScreen {
         Ok(Transition::Stay)
     }
 }
-

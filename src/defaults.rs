@@ -18,4 +18,7 @@ impl Defaults {
 
     /* Create Key Pair */
     pub const CREATE_KEYPAIR_OUT_DIR: &'static str = "./generated_private_keys";
+
+     /* Decryption */
+    pub const DECRYPT_OUTPUT_DIR: &'static str = "./decrypted_files";
 }

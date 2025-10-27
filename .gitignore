@@ -22,6 +22,7 @@ build/
 out/
 outputFiles/
 generated_private_keys/
+decrypted_files
 
 # Temporary test scripts
 X-temporaryTestFilesGitIgnored/
