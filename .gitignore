@@ -26,6 +26,7 @@ generated_private_keys/
 # Temporary test scripts
 X-temporaryTestFilesGitIgnored/
 inputFiles/
+input_files/
 
 # OS junk
 .DS_Store

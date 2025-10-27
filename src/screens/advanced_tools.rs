@@ -30,6 +30,7 @@ enum MenuItem {
     CreateRevocation,
     CreateRedelegation,
     CreatePermanentInvalidation,
+    DecryptFile,                 // NEW
     BackToMain,
 }
 impl MenuItem {
@@ -40,6 +41,7 @@ impl MenuItem {
             MenuItem::CreateRevocation,
             MenuItem::CreateRedelegation,
             MenuItem::CreatePermanentInvalidation,
+            MenuItem::DecryptFile,          // NEW: placed before BackToMain
             MenuItem::BackToMain,
         ]
     }
@@ -50,6 +52,7 @@ impl MenuItem {
             MenuItem::CreateRevocation => "Create Revocation",
             MenuItem::CreateRedelegation => "Create Re-Delegation",
             MenuItem::CreatePermanentInvalidation => "Create Permanent Invalidation",
+            MenuItem::DecryptFile => "Decrypt File",                 // NEW
             MenuItem::BackToMain => "Back To Main Menu",
         }
     }
@@ -118,28 +121,27 @@ impl ScreenWidget for AdvancedToolsScreen {
         f.render_widget(header_para, top_chunks[0]);
         f.render_widget(explanation_para, top_chunks[2]);
 
-// MIDDLE
-f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
+        // MIDDLE
+        f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
 
-// Build list items, but start with an empty spacer line
-let mut list_items: Vec<ListItem> = Vec::new();
-list_items.push(ListItem::new(Line::from(""))); // <-- adds one blank line at top
+        // Build list items, but start with an empty spacer line
+        let mut list_items: Vec<ListItem> = Vec::new();
+        list_items.push(ListItem::new(Line::from(""))); // <-- adds one blank line at top
 
-for (i, it) in menu_items.iter().enumerate() {
-    let selected = i == self.menu_index;
-    let prefix = if selected { "▶ " } else { "  " };
-    let line = Line::from(vec![
-        Span::styled(prefix, Style::default().fg(Color::Cyan)),
-        Span::raw(it.label()),
-    ]);
-    list_items.push(ListItem::new(line));
-}
+        for (i, it) in menu_items.iter().enumerate() {
+            let selected = i == self.menu_index;
+            let prefix = if selected { "▶ " } else { "  " };
+            let line = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                Span::raw(it.label()),
+            ]);
+            list_items.push(ListItem::new(line));
+        }
 
-let list = List::new(list_items)
-    .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        let list = List::new(list_items)
+            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
-f.render_widget(list, regions.middle_inner);
-
+        f.render_widget(list, regions.middle_inner);
 
         // FOOTER
         f.render_widget(Block::default().borders(Borders::ALL), regions.bottom);
@@ -154,9 +156,9 @@ f.render_widget(list, regions.middle_inner);
     }
 
     async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
-                if let Some(t) = esc_to_back(k) {
-    return Ok(t); // Esc -> Back
-}
+        if let Some(t) = esc_to_back(k) {
+            return Ok(t); // Esc -> Back
+        }
         // Ctrl+Q here opens confirmation dialog (unlike main menu)
         if let KeyCode::Char('q') = k.code {
             if k.modifiers.contains(KeyModifiers::CONTROL) {
@@ -184,6 +186,8 @@ f.render_widget(list, regions.middle_inner);
                         Transition::Push(Box::new(crate::screens::CreateRedelegationScreen::new())),
                     MenuItem::CreatePermanentInvalidation =>
                         Transition::Push(Box::new(crate::screens::CreatePermanentInvalidationScreen::new())),
+                    MenuItem::DecryptFile =>                            // NEW
+                        Transition::Push(Box::new(crate::screens::DecryptFileScreen::new())),
                     MenuItem::BackToMain => Transition::Pop,
                 })
             }
@@ -192,3 +196,4 @@ f.render_widget(list, regions.middle_inner);
         Ok(Transition::Stay)
     }
 }
+
