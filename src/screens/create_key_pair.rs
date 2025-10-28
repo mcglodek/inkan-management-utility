@@ -31,13 +31,18 @@ const CURSOR_BLOCK: &str = "█";
 
 #[derive(Default)]
 pub struct CreateKeyPairScreen {
-    field_index: usize,     // 0..=2 text fields, 3 show password, 4 text (out dir), 5 method toggle, 6 submit, 7 cancel
+    // Focusable indices:
+    // 0 nickname (text), 1 password (text), 2 confirm (text),
+    // 3 show password (toggle), 4 out dir (text), 5 enc method (toggle),
+    // 6 hot_for_signing (toggle), 7 spacer, 8 submit (button), 9 cancel (button)
+    field_index: usize,
     nickname: TextField,
     password: TextField,
     confirm: TextField,
     out_dir: TextField,
     format_modern: bool,    // true = Argon2id + XChaCha20-Poly1305, false = OpenPGP
-    show_password: bool,    // NEW: show/hide password fields
+    show_password: bool,    // show/hide password fields
+    hot_for_signing: bool,  // NEW: “Mark As Hot Key For Signing”, default false (No)
 }
 
 impl CreateKeyPairScreen {
@@ -46,6 +51,7 @@ impl CreateKeyPairScreen {
         s.out_dir = TextField::with(Defaults::CREATE_KEYPAIR_OUT_DIR);
         s.format_modern = true;
         s.show_password = false;
+        s.hot_for_signing = false; // default “No”
         s
     }
 
@@ -56,7 +62,7 @@ impl CreateKeyPairScreen {
             0 => &mut self.nickname,
             1 => &mut self.password,
             2 => &mut self.confirm,
-            4 => &mut self.out_dir,   // moved from 3 -> 4
+            4 => &mut self.out_dir,
             _ => unreachable!("tf_mut called on non-text field"),
         }
     }
@@ -66,7 +72,7 @@ impl CreateKeyPairScreen {
             0 => &self.nickname,
             1 => &self.password,
             2 => &self.confirm,
-            4 => &self.out_dir,       // moved from 3 -> 4
+            4 => &self.out_dir,
             _ => unreachable!("tf_ref called on non-text field"),
         }
     }
@@ -110,6 +116,18 @@ impl CreateKeyPairScreen {
         Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
     }
 
+    // NEW: Hot key toggle line (“Yes” / “No”)
+    fn hot_for_signing_line(&self, selected: bool) -> Line<'static> {
+        let label_span = Span::styled("Mark As Hot Key For Signing: ", Style::default().fg(Color::Yellow));
+        let val = if self.hot_for_signing { "Yes" } else { "No" };
+        let val_style = if selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        Line::from(vec![label_span, Span::styled(val.to_string(), val_style)])
+    }
+
     // One horizontal line: < Create Key Pair >   < Cancel >
     fn buttons_line(submit_selected: bool, cancel_selected: bool) -> Line<'static> {
         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -142,8 +160,8 @@ impl ScreenWidget for CreateKeyPairScreen {
 
         let top_needed = 2 + 2 + header_lines + 1 + explanation_lines;
 
-        // Middle: now we have 8 focusable positions (0..=7) plus spacer
-        let middle_rows: u16 = 8 + 1;
+        // Middle: now we have 10 focusable positions (0..=9) plus spacer line
+        let middle_rows: u16 = 10 + 1;
         let middle_needed = 2 + 2 + middle_rows;
 
         let footer_height = 3;
@@ -192,8 +210,9 @@ impl ScreenWidget for CreateKeyPairScreen {
         lines.push(self.show_password_line(self.field_index == 3)); // directly under Confirm Password
         lines.push(field_line_text("Output Directory", self.tf_ref(4), self.field_index == 4)); // Output Dir at index 4
         lines.push(self.encryption_method_line(self.field_index == 5));
-        lines.push(Line::from("")); // spacer
-        lines.push(Self::buttons_line(self.field_index == 6, self.field_index == 7));
+        lines.push(self.hot_for_signing_line(self.field_index == 6)); // NEW toggle line
+        lines.push(Line::from("")); // spacer at index 7
+        lines.push(Self::buttons_line(self.field_index == 8, self.field_index == 9)); // Submit / Cancel
 
         let middle_para = Paragraph::new(lines);
         f.render_widget(middle_para, regions.middle_inner);
@@ -221,17 +240,29 @@ impl ScreenWidget for CreateKeyPairScreen {
             }
         }
 
-        match k.code {
-            // Navigation
-            KeyCode::Up => {
-                if self.field_index == 0 { self.field_index = 7; } else { self.field_index -= 1; }
+            // helper to skip the spacer index
+            fn next_focus(i: usize) -> usize {
+                let mut n = (i + 1) % 10;
+                if n == 7 { n = (n + 1) % 10; }
+                n
             }
-            KeyCode::Down | KeyCode::Tab => {
-                self.field_index = (self.field_index + 1) % 8;
+            fn prev_focus(i: usize) -> usize {
+                let mut p = if i == 0 { 9 } else { i - 1 };
+                if p == 7 { p = if p == 0 { 9 } else { p - 1 }; }
+                p
             }
 
+            match k.code {
+                // Navigation
+                KeyCode::Up => {
+                    self.field_index = prev_focus(self.field_index);
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    self.field_index = next_focus(self.field_index);
+                }
+
             // Enter on buttons
-            KeyCode::Enter if self.field_index == 6 => {
+            KeyCode::Enter if self.field_index == 8 => {
                 // === SUBMIT: create + encrypt + save ===
                 let nickname = self.nickname.text.trim();
                 if nickname.is_empty() {
@@ -275,10 +306,23 @@ impl ScreenWidget for CreateKeyPairScreen {
                     v.into_iter().next().ok_or_else(|| anyhow!("internal: expected one key"))?
                 };
 
-                // Build file path: "<out_dir>/<sanitized-nickname>.<ext>"
-                let ext = if self.format_modern { "inkan" } else { "pgp" };
-                let filename = format!("{}.{}", sanitize_filename(nickname), ext);
-                let file_path = out_dir_path.join(filename);
+                    // === Build file path and name template ===
+                    let nick_sanitized = sanitize_filename(nickname);
+
+                    // Extension is fixed per encryption type
+                    let ext = if self.format_modern { "enc" } else { "pgp" };
+
+                    // Prefix depends on the "Mark As Hot Key For Signing" toggle
+                    let prefix = if self.hot_for_signing {
+                        "HOT_PRIVKEY_FOR_SIGNING_KEEP_PROTECTED"
+                    } else {
+                        "COLD_STORAGE_PRIVKEY_KEEP_AIRGAPPED"
+                    };
+
+                    // Final filename pattern
+                    let base = format!("{}_{}", prefix, nick_sanitized);
+                    let filename = format!("{}.{}", base, ext);
+                    let file_path = out_dir_path.join(filename);
 
                 // Password bytes (will be zeroized by savers)
                 let mut password_utf8 = pwd.into_bytes();
@@ -315,7 +359,7 @@ impl ScreenWidget for CreateKeyPairScreen {
                     ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::PopToMainMenu)
                 )));
             }
-            KeyCode::Enter if self.field_index == 7 => {
+            KeyCode::Enter if self.field_index == 9 => {
                 return Ok(Transition::Pop);
             }
 
@@ -329,7 +373,12 @@ impl ScreenWidget for CreateKeyPairScreen {
                 self.show_password = !self.show_password;
             }
 
-            // Cursor movement within text fields (same as batch.rs)
+            // Toggle Hot For Signing (index 6) — Yes/No
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 6 => {
+                self.hot_for_signing = !self.hot_for_signing;
+            }
+
+            // Cursor movement within text fields
             KeyCode::Left if self.is_text() => self.tf_mut(self.field_index).move_left(),
             KeyCode::Right if self.is_text() => self.tf_mut(self.field_index).move_right(),
             KeyCode::Home if self.is_text() => self.tf_mut(self.field_index).home(),

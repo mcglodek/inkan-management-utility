@@ -18,6 +18,9 @@ const KDF_ID_ARGON2ID: u8 = 1;
 
 /// Options for the modern saver.
 pub struct ModernOptions<'a> {
+    /// May be either a directory path OR a full path including a filename.
+    /// If a filename is provided, we will use it verbatim (and ensure uniqueness).
+    /// If a directory is provided, we will derive a filename from `key_pair_nickname`.
     pub file_path: &'a str,
     pub key_pair_nickname: &'a str,
     /// Password bytes (UTF-8). This will be zeroized here.
@@ -73,6 +76,9 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 /// Encrypts and writes a **single** private key (hex, no `0x`) to file using the neutral header.
 /// Recomputes all public forms from the private key to ensure internal consistency.
 /// RETURNS: PathBuf of the actual file written.
+///
+/// IMPORTANT: This function now **respects the provided filename** (if any) in `opts.file_path`.
+/// If `opts.file_path` is a directory, we fall back to a safe default filename derived from the nickname.
 pub fn save_modern_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
     opts: ModernOptions<'_>,
@@ -159,36 +165,35 @@ pub fn save_modern_encrypted_from_privkey_hex(
         .encrypt((&nonce).into(), Payload { aad: &header, msg: payload_pretty.as_bytes() })
         .map_err(|e| io_err(format!("encrypt error: {e}")))?;
 
-    // 7) Resolve output path & write file: [header || ciphertext] with unique filename
-    // sanitize nickname
-    let safe_nickname = {
-        let s: String = opts
+    // 7) Resolve output path & write file: [header || ciphertext] with unique filename.
+    // Respect the provided filename if present; otherwise derive from nickname.
+    let provided = Path::new(opts.file_path);
+
+    // Determine base_dir and filename_to_use
+    let (base_dir, filename_to_use): (PathBuf, String) = if provided.file_name().is_some() {
+        // A filename was provided
+        let parent = provided.parent().unwrap_or_else(|| Path::new("."));
+        (parent.to_path_buf(), provided.file_name().unwrap().to_string_lossy().into_owned())
+    } else {
+        // Only a directory was provided — derive a default from nickname
+        let base = provided.to_path_buf();
+        let safe_nickname: String = opts
             .key_pair_nickname
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
             .collect();
-        if s.is_empty() { "Keypair".to_string() } else { s }
-    };
-
-    // decide base directory even if a file path was provided
-    let provided = Path::new(opts.file_path);
-    let base_dir: PathBuf = if provided.is_dir() {
-        provided.to_path_buf()
-    } else if let Some(parent) = provided.parent() {
-        parent.to_path_buf()
-    } else {
-        PathBuf::from(".")
+        let safe_nickname = if safe_nickname.is_empty() { "Keypair".to_string() } else { safe_nickname };
+        // Default modern extension if none was given upstream
+        let derived = format!("{}_Private_Key.inkan", safe_nickname);
+        (base, derived)
     };
 
     // ensure directory exists
     fs::create_dir_all(&base_dir)
         .map_err(|e| io_err(format!("create dir {}: {e}", base_dir.display())))?;
 
-    // standardized filename; uniqueness handled by create_unique_file()
-    let base_filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.enc", safe_nickname);
-
     // open a uniquely named file (no overwrite) and remember the final path
-    let (f, final_path) = create_unique_file(&base_dir, &base_filename)?;
+    let (f, final_path) = create_unique_file(&base_dir, &filename_to_use)?;
     let mut w = BufWriter::new(f);
     w.write_all(&header)?;
     w.write_all(&ciphertext)?;

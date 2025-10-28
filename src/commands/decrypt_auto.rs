@@ -76,7 +76,7 @@ fn derive_output_name(input_path: &Path) -> String {
         fname
     };
 
-    format!("NOT_ENCRYPTED_DO_NOT_SHARE_{}.json", base)
+    format!("CAREFUL_NOT_ENCRYPTED_{}.json", base)
 }
 
 /// Create a unique path by appending " (1)", " (2)", ... before the extension if the file exists.

@@ -25,7 +25,6 @@ enum MenuItem {
     RecoverIdentity,
     AdvancedTools,
     Keygen,
-    BatchSign,
     Quit,
 }
 impl MenuItem {
@@ -35,7 +34,6 @@ impl MenuItem {
             MenuItem::RecoverIdentity,
             MenuItem::AdvancedTools,
             MenuItem::Keygen,
-            MenuItem::BatchSign,
             MenuItem::Quit,
         ]
     }
@@ -45,7 +43,6 @@ impl MenuItem {
             MenuItem::RecoverIdentity => "Recover Inkan Identity",
             MenuItem::AdvancedTools => "Advanced Tools",
             MenuItem::Keygen => "Generate Keys",
-            MenuItem::BatchSign => "Batch Sign Transactions",
             MenuItem::Quit => "Quit",
         }
     }
@@ -120,28 +117,27 @@ impl ScreenWidget for MainMenuScreen {
         f.render_widget(header_para, top_chunks[0]);
         f.render_widget(explanation_para, top_chunks[2]);
 
-// MIDDLE
-f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
+        // MIDDLE
+        f.render_widget(Block::default().borders(Borders::ALL), regions.middle);
 
-// Build list items, but start with an empty spacer line
-let mut list_items: Vec<ListItem> = Vec::new();
-list_items.push(ListItem::new(Line::from(""))); // <-- adds one blank line at top
+        // Build list items, but start with an empty spacer line
+        let mut list_items: Vec<ListItem> = Vec::new();
+        list_items.push(ListItem::new(Line::from(""))); // <-- adds one blank line at top
 
-for (i, it) in menu_items.iter().enumerate() {
-    let selected = i == self.menu_index;
-    let prefix = if selected { "▶ " } else { "  " };
-    let line = Line::from(vec![
-        Span::styled(prefix, Style::default().fg(Color::Cyan)),
-        Span::raw(it.label()),
-    ]);
-    list_items.push(ListItem::new(line));
-}
+        for (i, it) in menu_items.iter().enumerate() {
+            let selected = i == self.menu_index;
+            let prefix = if selected { "▶ " } else { "  " };
+            let line = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                Span::raw(it.label()),
+            ]);
+            list_items.push(ListItem::new(line));
+        }
 
-let list = List::new(list_items)
-    .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        let list = List::new(list_items)
+            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
-f.render_widget(list, regions.middle_inner);
-
+        f.render_widget(list, regions.middle_inner);
 
         // FOOTER (single border + inner margin, with wrapping)
         f.render_widget(Block::default().borders(Borders::ALL), regions.bottom);
@@ -181,8 +177,6 @@ f.render_widget(list, regions.middle_inner);
                         Transition::Push(Box::new(crate::screens::AdvancedToolsScreen::new())),
                     MenuItem::Keygen =>
                         Transition::Push(Box::new(crate::screens::KeygenScreen::new())),
-                    MenuItem::BatchSign =>
-                        Transition::Push(Box::new(crate::screens::BatchScreen::new())),
                     MenuItem::Quit =>
                         Transition::Quit, // ← exit immediately from main menu
                 })

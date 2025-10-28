@@ -1,7 +1,6 @@
 // Core screens
 pub mod main_menu;
 pub mod keygen;
-pub mod batch;
 pub mod confirm_quit;
 pub mod result;
 
@@ -41,7 +40,6 @@ pub mod select_permanent_invalidation_info_file;
 // ---------------- Re-exports ----------------
 pub use main_menu::MainMenuScreen;
 pub use keygen::KeygenScreen;
-pub use batch::BatchScreen;
 pub use confirm_quit::ConfirmQuitScreen;
 pub use result::ResultScreen;
 

@@ -35,10 +35,8 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    // Try the base name first, then " (1)", " (2)", ...
     for i in 0..10_000 {
         let candidate_name = if i == 0 {
-            // No suffix on the first try
             if ext.is_empty() { stem.to_string() } else { format!("{stem}.{ext}") }
         } else {
             if ext.is_empty() { format!("{stem} ({i})") } else { format!("{stem} ({i}).{ext}") }
@@ -47,11 +45,11 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 
         match OpenOptions::new()
             .write(true)
-            .create_new(true) // <-- never overwrite; fail if exists
+            .create_new(true)
             .open(&path)
         {
             Ok(f) => return Ok((f, path)),
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue, // try next suffix
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         }
     }
@@ -62,6 +60,9 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 /// Save as a binary OpenPGP message using symmetric encryption (legacy-compatible).
 /// `privkey_hex_no0x` must be 32-byte hex without `0x`.
 /// RETURNS: PathBuf of the actual file written.
+///
+/// IMPORTANT: This function now **respects the provided filename** in `file_path` if present.
+/// If `file_path` is a directory, it derives `"{safe_nickname}_Private_Key.pgp"`.
 pub fn save_pgp_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
     nickname: &str,
@@ -97,7 +98,7 @@ pub fn save_pgp_encrypted_from_privkey_hex(
     };
     let data = serde_json::to_vec_pretty(&payload).expect("serialize payload");
 
-    // 4) Resolve output directory and base filename
+    // 4) Resolve output directory + filename
     let safe_nickname = {
         let s: String = nickname
             .chars()
@@ -106,25 +107,26 @@ pub fn save_pgp_encrypted_from_privkey_hex(
         if s.is_empty() { "Keypair".to_string() } else { s }
     };
 
-    // decide base directory even if a file path was provided
     let provided = Path::new(file_path);
-    let base_dir: PathBuf = if provided.is_dir() {
-        provided.to_path_buf()
-    } else if let Some(parent) = provided.parent() {
-        parent.to_path_buf()
+
+    // Determine base_dir and filename_to_use
+    let (base_dir, filename_to_use): (PathBuf, String) = if provided.file_name().is_some() {
+        // A filename was provided — use it verbatim (e.g. your HOT/COLD prefix and ".pgp")
+        let parent = provided.parent().unwrap_or_else(|| Path::new("."));
+        (parent.to_path_buf(), provided.file_name().unwrap().to_string_lossy().into_owned())
     } else {
-        PathBuf::from(".")
+        // Only a directory was provided — derive a default filename with .pgp
+        let base = provided.to_path_buf();
+        let derived = format!("{}_Private_Key.pgp", safe_nickname);
+        (base, derived)
     };
 
     // ensure directory exists
     fs::create_dir_all(&base_dir)
         .map_err(|e| io_err(format!("create dir {}: {e}", base_dir.display())))?;
 
-    // standard base filename (without suffix); uniqueness handled by create_unique_file()
-    let base_filename = format!("SECRET_KEEP_AIRGAPPED_{}_Private_Key.pgp", safe_nickname);
-
     // 5) Open a uniquely named file (no overwrite) and remember the final path
-    let (f, final_path) = create_unique_file(&base_dir, &base_filename)?;
+    let (f, final_path) = create_unique_file(&base_dir, &filename_to_use)?;
     let mut w = BufWriter::new(f);
 
     // 6) Encrypt (legacy-compatible: no explicit AEAD call)
