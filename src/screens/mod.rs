@@ -12,14 +12,17 @@ pub mod advanced_tools;
 
 // Advanced Tools -> Create* pages
 pub mod create_key_pair;
-pub mod create_delegation;
+pub mod create_delegation; // canonical Create Delegation screen (manual input)
 pub mod create_revocation;
 pub mod create_redelegation;
 pub mod create_permanent_invalidation;
 pub mod decrypt_file;                 // already added
 pub mod select_file_for_decryption;   // NEW
 pub mod decrypt_file_details;         // NEW
-pub mod manually_input_delegation_info; // <-- NEW
+
+// Legacy/removed modules (Option B cleanup):
+// pub mod create_delegation;                 // remove old intermediary page
+// pub mod manually_input_delegation_info;    // remove old manual-input name
 
 // Re-exports (so callers can use crate::screens::XxxScreen)
 pub use main_menu::MainMenuScreen;
@@ -33,14 +36,13 @@ pub use recover_inkan_identity::RecoverInkanIdentityScreen;
 pub use advanced_tools::AdvancedToolsScreen;
 
 pub use create_key_pair::CreateKeyPairScreen;
-pub use create_delegation::CreateDelegationScreen;
+pub use create_delegation::CreateDelegationScreen; // ← updated re-export
 pub use create_revocation::CreateRevocationScreen;
 pub use create_redelegation::CreateRedelegationScreen;
 pub use create_permanent_invalidation::CreatePermanentInvalidationScreen;
 pub use decrypt_file::DecryptFileScreen;
 pub use select_file_for_decryption::SelectFileForDecryptionScreen; // NEW
 pub use decrypt_file_details::DecryptFileDetailsScreen;             // NEW
-pub use manually_input_delegation_info::ManuallyInputDelegationInfoScreen; // <-- NEW
 
 // Re-export the confirmation screen type
 pub mod confirm_ok;
@@ -51,3 +53,4 @@ pub mod select_delegation_info_file;
 
 pub use choose_delegation_info_dir::ChooseDelegationInfoDirScreen;
 pub use select_delegation_info_file::SelectDelegationInfoFileScreen;
+
