@@ -31,11 +31,13 @@ use crate::write_signed_transactions_to_file::{
     build_filename_for_any_tx,
 };
 
+// NEW: load-from-file flow (directory picker)
+use crate::screens::ChooseDelegationInfoDirScreen;
 
 pub struct ManuallyInputDelegationInfoScreen {
     // 0 delegator, 1 delegatee, 2 toggle, 3 nonce,
     // 4 gas_limit, 5 max_fee_per_gas, 6 max_priority_fee_per_gas,
-    // 7 out_dir, 8 submit, 9 back
+    // 7 out_dir, 8 submit, 9 load_from_file, 10 back
     field_index: usize,
     delegator_priv: TextField,
     delegatee_priv: TextField,
@@ -92,10 +94,56 @@ impl ManuallyInputDelegationInfoScreen {
         }
     }
 
-    // One horizontal line: < Create Delegation >   < Back >
-    fn buttons_line(submit_selected: bool, back_selected: bool) -> Line<'static> {
+    // Small helper: set text and move cursor to end.
+    fn set_textfield(tf: &mut TextField, val: &str) {
+        tf.text = val.to_string();
+        tf.end();
+    }
+
+    // NEW: apply pending prefill from ctx (called at top of on_key).
+    fn apply_prefill_if_any(&mut self, ctx: &mut AppCtx) {
+        if let Some(prefill) = ctx.pending_delegation_prefill.take() {
+            // Strings
+            if let Some(v) = prefill.map.get("DELEGATOR_PRIVKEY") {
+                Self::set_textfield(&mut self.delegator_priv, v);
+            }
+            if let Some(v) = prefill.map.get("DELEGATEE_PRIVKEY") {
+                Self::set_textfield(&mut self.delegatee_priv, v);
+            }
+            if let Some(v) = prefill.map.get("NONCE") {
+                Self::set_textfield(&mut self.nonce, v);
+            }
+            if let Some(v) = prefill.map.get("GAS_LIMIT") {
+                Self::set_textfield(&mut self.gas_limit, v);
+            }
+            if let Some(v) = prefill.map.get("MAX_FEE_PER_GAS") {
+                Self::set_textfield(&mut self.max_fee_per_gas, v);
+            }
+            if let Some(v) = prefill.map.get("MAX_PRIORITY_FEE_PER_GAS") {
+                Self::set_textfield(&mut self.max_priority_fee_per_gas, v);
+            }
+            if let Some(v) = prefill.map.get("OUTPUT_DIRECTORY") {
+                Self::set_textfield(&mut self.out_dir, v);
+            }
+
+            // Boolean
+            if let Some(v) = prefill.map.get("REQUIRE_DELEGATEE_SIG_FOR_REVOCATION") {
+                let vv = v.to_ascii_lowercase();
+                self.require_delegatee_sig_revocation = matches!(
+                    vv.as_str(),
+                    "true" | "1" | "yes" | "on" | "y" | "t"
+                );
+            }
+
+        }
+    }
+
+    // UPDATED: One horizontal line: < Create Delegation >   < Load From File >   < Back >
+    fn buttons_line(submit_selected: bool, load_selected: bool, back_selected: bool) -> Line<'static> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.extend(button_spans("Create Delegation", submit_selected));
+        spans.push(Span::raw("   "));
+        spans.extend(button_spans("Load From File", load_selected));
         spans.push(Span::raw("   "));
         spans.extend(button_spans("Back", back_selected));
         Line::from(spans)
@@ -168,13 +216,11 @@ impl ManuallyInputDelegationInfoScreen {
             .context("failed to construct and sign delegation transaction")?;
 
         // Build filename per spec: "[DelegatorX]_delegates_to_[DelegateeX]_nonce_[nonce].txt"
-
-            let filename = build_filename_for_any_tx(&entry.decoded_tx);
-            let mut out_path = self.ensure_out_dir_nonempty()?;
-            out_path.push(filename);
-            let written = write_single_signed_transaction(&out_path, &entry, true)
-                .context("failed to write signed transaction file")?;
-
+        let filename = build_filename_for_any_tx(&entry.decoded_tx);
+        let mut out_path = self.ensure_out_dir_nonempty()?;
+        out_path.push(filename);
+        let written = write_single_signed_transaction(&out_path, &entry, true)
+            .context("failed to write signed transaction file")?;
 
         Ok(written)
     }
@@ -253,6 +299,14 @@ impl Default for ManuallyInputDelegationInfoScreen {
 
 #[async_trait]
 impl ScreenWidget for ManuallyInputDelegationInfoScreen {
+
+    // Add this inside the impl ScreenWidget for ManuallyInputDelegationInfoScreen
+fn apply_prefill(&mut self, ctx: &mut AppCtx) {
+    // this calls the helper you already have
+    self.apply_prefill_if_any(ctx);
+}
+
+
     fn title(&self) -> &str { "" }
 
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
@@ -274,8 +328,8 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
 
         let top_needed = 2 + 2 + header_lines + 1 + explanation_lines;
 
-        // Middle: 10 focusable positions (0..=9) plus spacer
-        let middle_rows: u16 = 10 + 1;
+        // Middle: 11 focusable positions (0..=10) plus spacer
+        let middle_rows: u16 = 11 + 1;
         let middle_needed = 2 + 2 + middle_rows;
 
         let footer_height = 3;
@@ -358,7 +412,11 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
         lines.push(field_line_text("Output Directory", self.tf_ref(7), self.field_index == 7));
 
         lines.push(Line::from("")); // spacer
-        lines.push(Self::buttons_line(self.field_index == 8, self.field_index == 9));
+        lines.push(Self::buttons_line(
+            self.field_index == 8,
+            self.field_index == 9,
+            self.field_index == 10
+        ));
 
         let middle_para = Paragraph::new(lines);
         f.render_widget(middle_para, regions.middle_inner);
@@ -375,88 +433,96 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
         f.render_widget(Paragraph::new(footer_line).wrap(Wrap { trim: true }), regions.bottom_inner);
     }
 
-    async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
-        if let Some(t) = esc_to_back(k) {
-            return Ok(t); // Esc -> Back
-        }
-
-        if let KeyCode::Char('q') = k.code {
-            if k.modifiers.contains(KeyModifiers::CONTROL) {
-                return Ok(Transition::Push(Box::new(crate::screens::ConfirmQuitScreen::new())));
-            }
-        }
-
-        match k.code {
-            // Navigation
-            KeyCode::Up => {
-                if self.field_index == 0 { self.field_index = 9; } else { self.field_index -= 1; }
-            }
-            KeyCode::Down | KeyCode::Tab => {
-                self.field_index = (self.field_index + 1) % 10;
-            }
-
-            // Toggle boolean (index 2)
-            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 2 => {
-                self.require_delegatee_sig_revocation = !self.require_delegatee_sig_revocation;
-            }
-
-            // Enter on [Create Delegation]
-            KeyCode::Enter if self.field_index == 8 => {
-                // Enforce caps first
-                if let Err(e) = self.validate_gas_limit() {
-                    return Ok(Transition::Push(Box::new(
-                        ConfirmOkScreen::new(&format!("Error: {e}")).with_after_ok(AfterOk::Pop)
-                    )));
-                }
-                if let Err(e) = self.validate_fee_caps() {
-                    return Ok(Transition::Push(Box::new(
-                        ConfirmOkScreen::new(&format!("Error: {e}")).with_after_ok(AfterOk::Pop)
-                    )));
-                }
-
-                // Create, sign, and write the single-entry JSON
-                match self.create_and_write_delegation().await {
-                    Ok(path) => {
-                        let lines = vec![
-                            "Saved signed delegation transaction (one-element JSON array):".to_string(),
-                            "".to_string(),
-                            path.display().to_string(),
-                        ];
-                        return Ok(Transition::Push(Box::new(
-                            ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::Pop)
-                        )));
-                    }
-                    Err(e) => {
-                        return Ok(Transition::Push(Box::new(
-                            ConfirmOkScreen::new(&format!("Error: {e:#}"))
-                                .with_after_ok(AfterOk::Pop)
-                        )));
-                    }
-                }
-            }
-
-            // Enter on [Back]
-            KeyCode::Enter if self.field_index == 9 => {
-                return Ok(Transition::Pop); // Back
-            }
-
-            // Cursor movement in text fields
-            KeyCode::Left if self.is_text() => self.tf_mut(self.field_index).move_left(),
-            KeyCode::Right if self.is_text() => self.tf_mut(self.field_index).move_right(),
-            KeyCode::Home if self.is_text() => self.tf_mut(self.field_index).home(),
-            KeyCode::End if self.is_text() => self.tf_mut(self.field_index).end(),
-
-            // Editing
-            KeyCode::Backspace if self.is_text() => self.tf_mut(self.field_index).backspace(),
-            KeyCode::Delete if self.is_text() => self.tf_mut(self.field_index).delete(),
-            KeyCode::Char(c) if self.is_text() && !k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.tf_mut(self.field_index).insert_char(c)
-            }
-
-            _ => {}
-        }
-        Ok(Transition::Stay)
+async fn on_key(&mut self, k: KeyEvent, _ctx: &mut AppCtx) -> Result<Transition> {
+    if let Some(t) = esc_to_back(k) {
+        return Ok(t); // Esc -> Back
     }
+
+    if let KeyCode::Char('q') = k.code {
+        if k.modifiers.contains(KeyModifiers::CONTROL) {
+            return Ok(Transition::Push(Box::new(crate::screens::ConfirmQuitScreen::new())));
+        }
+    }
+
+    match k.code {
+        // Navigation
+        KeyCode::Up => {
+            if self.field_index == 0 { self.field_index = 10; } else { self.field_index -= 1; }
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            self.field_index = (self.field_index + 1) % 11;
+        }
+
+        // Toggle boolean (index 2)
+        KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right if self.field_index == 2 => {
+            self.require_delegatee_sig_revocation = !self.require_delegatee_sig_revocation;
+        }
+
+        // Enter on [Create Delegation]
+        KeyCode::Enter if self.field_index == 8 => {
+            // Enforce caps first
+            if let Err(e) = self.validate_gas_limit() {
+                return Ok(Transition::Push(Box::new(
+                    ConfirmOkScreen::new(&format!("Error: {e}")).with_after_ok(AfterOk::Pop)
+                )));
+            }
+            if let Err(e) = self.validate_fee_caps() {
+                return Ok(Transition::Push(Box::new(
+                    ConfirmOkScreen::new(&format!("Error: {e}")).with_after_ok(AfterOk::Pop)
+                )));
+            }
+
+            // Create, sign, and write the single-entry JSON
+            match self.create_and_write_delegation().await {
+                Ok(path) => {
+                    let lines = vec![
+                        "Saved signed delegation transaction (one-element JSON array):".to_string(),
+                        "".to_string(),
+                        path.display().to_string(),
+                    ];
+                    return Ok(Transition::Push(Box::new(
+                        ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::Pop)
+                    )));
+                }
+                Err(e) => {
+                    return Ok(Transition::Push(Box::new(
+                        ConfirmOkScreen::new(&format!("Error: {e:#}"))
+                            .with_after_ok(AfterOk::Pop)
+                    )));
+                }
+            }
+        }
+
+        // Enter on [Load From File]
+        KeyCode::Enter if self.field_index == 9 => {
+            return Ok(Transition::Push(Box::new(
+                ChooseDelegationInfoDirScreen::new()
+            )));
+        }
+
+        // Enter on [Back]
+        KeyCode::Enter if self.field_index == 10 => {
+            return Ok(Transition::Pop); // Back
+        }
+
+        // Cursor movement in text fields
+        KeyCode::Left if self.is_text() => self.tf_mut(self.field_index).move_left(),
+        KeyCode::Right if self.is_text() => self.tf_mut(self.field_index).move_right(),
+        KeyCode::Home if self.is_text() => self.tf_mut(self.field_index).home(),
+        KeyCode::End if self.is_text() => self.tf_mut(self.field_index).end(),
+
+        // Editing
+        KeyCode::Backspace if self.is_text() => self.tf_mut(self.field_index).backspace(),
+        KeyCode::Delete if self.is_text() => self.tf_mut(self.field_index).delete(),
+        KeyCode::Char(c) if self.is_text() && !k.modifiers.contains(KeyModifiers::CONTROL) => {
+            self.tf_mut(self.field_index).insert_char(c)
+        }
+
+        _ => {}
+    }
+    Ok(Transition::Stay)
+}
+
 }
 
 /* ---------- helpers ---------- */

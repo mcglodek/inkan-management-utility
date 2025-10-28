@@ -1,6 +1,7 @@
 // src/util.rs
 use anyhow::{anyhow, Result};
 use ethers_core::types::{Address, U256};
+use std::collections::HashMap;
 
 pub fn parse_u256_any(s: &str) -> Result<U256> {
     Ok(if let Some(x) = s.strip_prefix("0x") {
@@ -35,5 +36,39 @@ pub fn expect_bytes<'a>(tok: &'a ethers_core::abi::Token) -> Result<&'a Vec<u8>>
     } else {
         Err(anyhow!("expected bytes"))
     }
+}
+
+/// Dotenv-style parser for delegation info files.
+/// - Ignores blank lines and lines starting with `#`
+/// - Splits on the first '='
+/// - Trims whitespace
+/// - Supports surrounding single or double quotes
+/// - Last duplicate key wins
+pub fn parse_delegation_env(contents: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let Some(eq) = trimmed.find('=') else { continue; };
+        let (k, vraw) = trimmed.split_at(eq);
+        let key = k.trim().to_string();
+
+        let mut val = vraw[1..].trim().to_string();
+
+        // Remove matching quotes
+        if (val.starts_with('"') && val.ends_with('"') && val.len() >= 2)
+            || (val.starts_with('\'') && val.ends_with('\'') && val.len() >= 2)
+        {
+            val = val[1..val.len() - 1].to_string();
+        }
+
+        out.insert(key, val);
+    }
+
+    out
 }
 

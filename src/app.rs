@@ -12,6 +12,7 @@ use ratatui::{
     widgets::Clear,
     Terminal,
 };
+use std::collections::HashMap;
 use std::io;
 
 use crate::screens::ConfirmQuitScreen;
@@ -22,17 +23,36 @@ pub enum Transition {
     Pop,
     Replace(Box<dyn ScreenWidget>),
     Quit,
+    // NEW: pop multiple screens at once
+    PopN(usize),
+}
+
+/// Small handoff bucket used when loading a delegation info file.
+/// The file select screen fills this map; the Delegation Input screen
+/// reads and applies it once, then clears it.
+#[derive(Debug, Clone, Default)]
+pub struct DelegationPrefill {
+    pub map: HashMap<String, String>,
 }
 
 #[derive(Default)]
 pub struct AppCtx {
     pub result_text: String,
+
+    /// If set, contains key/value pairs loaded from a delegation info file.
+    /// The Delegation Input screen should `take()` and apply these once.
+    pub pending_delegation_prefill: Option<DelegationPrefill>,
 }
 
 #[async_trait]
 pub trait ScreenWidget {
     fn title(&self) -> &str { "Inkan" }
     fn draw(&self, f: &mut Frame<'_>, area: Rect, ctx: &AppCtx);
+
+    /// NEW: Called before each draw when this screen is on top.
+    /// Use this to apply any pending prefill immediately upon returning.
+    fn apply_prefill(&mut self, _ctx: &mut AppCtx) {}
+
     async fn on_key(&mut self, key: KeyEvent, ctx: &mut AppCtx) -> Result<Transition>;
 }
 
@@ -49,6 +69,11 @@ pub async fn run_menu() -> Result<()> {
     let mut stack: Vec<Box<dyn ScreenWidget>> = vec![Box::new(crate::screens::MainMenuScreen::default())];
 
     loop {
+        // Allow the top screen to apply any pending prefill before rendering.
+        if let Some(top) = stack.last_mut() {
+            top.apply_prefill(&mut ctx);
+        }
+
         terminal.draw(|f| {
             let size = f.size();
             if let Some(top) = stack.last() {
@@ -83,6 +108,15 @@ pub async fn run_menu() -> Result<()> {
                                 stack.push(s);
                             }
                             Transition::Quit => break,
+                            // NEW: pop multiple levels
+                            Transition::PopN(n) => {
+                                for _ in 0..n {
+                                    if stack.pop().is_none() { break; }
+                                }
+                                if stack.is_empty() {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -98,4 +132,3 @@ pub async fn run_menu() -> Result<()> {
     terminal.show_cursor()?;
     Ok(())
 }
-

@@ -46,3 +46,8 @@ pub use manually_input_delegation_info::ManuallyInputDelegationInfoScreen; // <-
 pub mod confirm_ok;
 pub use confirm_ok::{ConfirmOkScreen, AfterOk};
 
+pub mod choose_delegation_info_dir;
+pub mod select_delegation_info_file;
+
+pub use choose_delegation_info_dir::ChooseDelegationInfoDirScreen;
+pub use select_delegation_info_file::SelectDelegationInfoFileScreen;
