@@ -34,6 +34,10 @@ pub mod select_revocation_info_file;
 pub mod choose_redelegation_info_dir;
 pub mod select_redelegation_info_file;
 
+// Load-from-file flows (permanent invalidation)
+pub mod choose_permanent_invalidation_info_dir;
+pub mod select_permanent_invalidation_info_file;
+
 // ---------------- Re-exports ----------------
 pub use main_menu::MainMenuScreen;
 pub use keygen::KeygenScreen;
@@ -63,6 +67,9 @@ pub use select_revocation_info_file::SelectRevocationInfoFileScreen;
 
 pub use choose_redelegation_info_dir::ChooseRedelegationInfoDirScreen;
 pub use select_redelegation_info_file::SelectRedelegationInfoFileScreen;
+
+pub use choose_permanent_invalidation_info_dir::ChoosePermanentInvalidationInfoDirScreen;
+pub use select_permanent_invalidation_info_file::SelectPermanentInvalidationInfoFileScreen;
 
 // Re-export the confirmation screen type
 pub mod confirm_ok;

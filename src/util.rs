@@ -88,3 +88,8 @@ pub fn parse_revocation_env(contents: &str) -> HashMap<String, String> {
 pub fn parse_redelegation_env(contents: &str) -> HashMap<String, String> {
     parse_kv_env(contents)
 }
+
+/// Dotenv-style parser for permanent invalidation info files (same rules as delegation).
+pub fn parse_permanent_invalidation_env(contents: &str) -> HashMap<String, String> {
+    parse_kv_env(contents)
+}
