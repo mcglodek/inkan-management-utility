@@ -38,13 +38,13 @@ pub fn expect_bytes<'a>(tok: &'a ethers_core::abi::Token) -> Result<&'a Vec<u8>>
     }
 }
 
-/// Dotenv-style parser for delegation info files.
+/// Internal: parse dotenv-style K=V lines into a map.
 /// - Ignores blank lines and lines starting with `#`
 /// - Splits on the first '='
 /// - Trims whitespace
 /// - Supports surrounding single or double quotes
 /// - Last duplicate key wins
-pub fn parse_delegation_env(contents: &str) -> HashMap<String, String> {
+fn parse_kv_env(contents: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
 
     for line in contents.lines() {
@@ -72,3 +72,12 @@ pub fn parse_delegation_env(contents: &str) -> HashMap<String, String> {
     out
 }
 
+/// Dotenv-style parser for delegation info files (backwards compatible).
+pub fn parse_delegation_env(contents: &str) -> HashMap<String, String> {
+    parse_kv_env(contents)
+}
+
+/// Dotenv-style parser for revocation info files (same rules as delegation).
+pub fn parse_revocation_env(contents: &str) -> HashMap<String, String> {
+    parse_kv_env(contents)
+}

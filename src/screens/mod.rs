@@ -12,19 +12,25 @@ pub mod advanced_tools;
 
 // Advanced Tools -> Create* pages
 pub mod create_key_pair;
-pub mod create_delegation; // canonical Create Delegation screen (manual input)
-pub mod create_revocation;
+pub mod create_delegation;                // canonical Create Delegation screen (manual input)
+pub mod create_revocation;                // canonical Create Revocation screen (manual input)
 pub mod create_redelegation;
 pub mod create_permanent_invalidation;
-pub mod decrypt_file;                 // already added
-pub mod select_file_for_decryption;   // NEW
-pub mod decrypt_file_details;         // NEW
 
-// Legacy/removed modules (Option B cleanup):
-// pub mod create_delegation;                 // remove old intermediary page
-// pub mod manually_input_delegation_info;    // remove old manual-input name
+// Decrypt flow
+pub mod decrypt_file;                     // already added
+pub mod select_file_for_decryption;       // NEW
+pub mod decrypt_file_details;             // NEW
 
-// Re-exports (so callers can use crate::screens::XxxScreen)
+// Load-from-file flows (delegation)
+pub mod choose_delegation_info_dir;
+pub mod select_delegation_info_file;
+
+// Load-from-file flows (revocation)
+pub mod choose_revocation_info_dir;
+pub mod select_revocation_info_file;
+
+// ---------------- Re-exports ----------------
 pub use main_menu::MainMenuScreen;
 pub use keygen::KeygenScreen;
 pub use batch::BatchScreen;
@@ -36,21 +42,24 @@ pub use recover_inkan_identity::RecoverInkanIdentityScreen;
 pub use advanced_tools::AdvancedToolsScreen;
 
 pub use create_key_pair::CreateKeyPairScreen;
-pub use create_delegation::CreateDelegationScreen; // ← updated re-export
+pub use create_delegation::CreateDelegationScreen;
 pub use create_revocation::CreateRevocationScreen;
 pub use create_redelegation::CreateRedelegationScreen;
 pub use create_permanent_invalidation::CreatePermanentInvalidationScreen;
+
 pub use decrypt_file::DecryptFileScreen;
-pub use select_file_for_decryption::SelectFileForDecryptionScreen; // NEW
-pub use decrypt_file_details::DecryptFileDetailsScreen;             // NEW
+pub use select_file_for_decryption::SelectFileForDecryptionScreen;
+pub use decrypt_file_details::DecryptFileDetailsScreen;
+
+pub use choose_delegation_info_dir::ChooseDelegationInfoDirScreen;
+pub use select_delegation_info_file::SelectDelegationInfoFileScreen;
+
+pub use choose_revocation_info_dir::ChooseRevocationInfoDirScreen;
+pub use select_revocation_info_file::SelectRevocationInfoFileScreen;
 
 // Re-export the confirmation screen type
 pub mod confirm_ok;
 pub use confirm_ok::{ConfirmOkScreen, AfterOk};
 
-pub mod choose_delegation_info_dir;
-pub mod select_delegation_info_file;
-
-pub use choose_delegation_info_dir::ChooseDelegationInfoDirScreen;
-pub use select_delegation_info_file::SelectDelegationInfoFileScreen;
-
+// Legacy/removed modules (Option B cleanup):
+// pub mod manually_input_delegation_info; // removed

@@ -27,9 +27,9 @@ pub enum Transition {
     PopN(usize),
 }
 
-/// Small handoff bucket used when loading a delegation info file.
-/// The file select screen fills this map; the Delegation Input screen
-/// reads and applies it once, then clears it.
+/// Small handoff bucket used when loading a delegation/revocation info file.
+/// The file select screen fills this map; the target input screen
+/// (Create Delegation or Create Revocation) reads and applies it once, then clears it.
 #[derive(Debug, Clone, Default)]
 pub struct DelegationPrefill {
     pub map: HashMap<String, String>,
@@ -42,6 +42,10 @@ pub struct AppCtx {
     /// If set, contains key/value pairs loaded from a delegation info file.
     /// The Delegation Input screen should `take()` and apply these once.
     pub pending_delegation_prefill: Option<DelegationPrefill>,
+
+    /// If set, contains key/value pairs loaded from a revocation info file.
+    /// The Revocation Input screen should `take()` and apply these once.
+    pub pending_revocation_prefill: Option<DelegationPrefill>,
 }
 
 #[async_trait]
@@ -49,7 +53,7 @@ pub trait ScreenWidget {
     fn title(&self) -> &str { "Inkan" }
     fn draw(&self, f: &mut Frame<'_>, area: Rect, ctx: &AppCtx);
 
-    /// NEW: Called before each draw when this screen is on top.
+    /// Called before each draw when this screen is on top.
     /// Use this to apply any pending prefill immediately upon returning.
     fn apply_prefill(&mut self, _ctx: &mut AppCtx) {}
 
@@ -108,7 +112,7 @@ pub async fn run_menu() -> Result<()> {
                                 stack.push(s);
                             }
                             Transition::Quit => break,
-                            // NEW: pop multiple levels
+                            // pop multiple levels
                             Transition::PopN(n) => {
                                 for _ in 0..n {
                                     if stack.pop().is_none() { break; }

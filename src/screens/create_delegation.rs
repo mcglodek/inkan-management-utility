@@ -309,7 +309,7 @@ impl ScreenWidget for CreateDelegationScreen {
     fn title(&self) -> &str { "" }
 
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
-        let header_text = "Create Delegation — Manual Input";
+        let header_text = "Create Delegation";
         let explanation_paras = [
             "Enter the fields below. The app will create and sign an EIP-1559 transaction",
             "for createDelegationEvent and save a one-element JSON array (pretty-printed)",
