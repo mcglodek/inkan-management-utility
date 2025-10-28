@@ -10,8 +10,7 @@ use ratatui::{
 };
 use textwrap::wrap;
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::app::{AppCtx, ScreenWidget, Transition};
 use crate::ui::layout::{three_box_layout, Margins};
@@ -22,6 +21,16 @@ use crate::defaults::Defaults;
 
 // Generic OK-only modal
 use crate::screens::{ConfirmOkScreen, AfterOk};
+
+// NEW: bring in ABI loader, processor, types, writer helpers
+use crate::abi::load_abi;
+use crate::process::{process_item, BatchOpts};
+use crate::types::Item;
+use crate::write_signed_transactions_to_file::{
+    write_single_signed_transaction,
+    build_filename_for_any_tx,
+};
+
 
 pub struct ManuallyInputDelegationInfoScreen {
     // 0 delegator, 1 delegatee, 2 toggle, 3 nonce,
@@ -92,8 +101,17 @@ impl ManuallyInputDelegationInfoScreen {
         Line::from(spans)
     }
 
-    fn build_batch_json(&self) -> Result<String> {
-        // Validate text fields
+    fn ensure_out_dir_nonempty(&self) -> Result<PathBuf> {
+        let out_dir = self.out_dir.text.trim();
+        if out_dir.is_empty() {
+            anyhow::bail!("Output Directory cannot be empty.");
+        }
+        Ok(PathBuf::from(out_dir))
+    }
+
+    /// Create, sign, and write a single delegation tx using process_item() + writer.
+    async fn create_and_write_delegation(&self) -> Result<PathBuf> {
+        // Validate required secrets
         let pk_x = self.delegator_priv.text.trim();
         let pk_y = self.delegatee_priv.text.trim();
         if pk_x.is_empty() {
@@ -107,66 +125,58 @@ impl ManuallyInputDelegationInfoScreen {
         let nonce_str = self.nonce.text.trim();
         let nonce: u64 = nonce_str.parse().context("Nonce must be an integer")?;
 
-        // Construct exactly the shape expected by your batch processor
-        let obj = serde_json::json!({
-            "FUNCTION_TO_CALL": "createDelegationEvent",
-            "NONCE": nonce,
-            "CHAIN_ID": Defaults::CHAIN_ID,
-            "CONTRACT_ADDRESS": Defaults::CONTRACT_ADDRESS,
-            "TYPE_A_PRIVKEY_X": pk_x,
-            "TYPE_A_PRIVKEY_Y": pk_y,
-            "TYPE_A_PUBKEY_Y": "",
-            "TYPE_A_UINT_X": 0,
-            "TYPE_A_UINT_Y": 0,
-            "TYPE_A_BOOLEAN": if self.require_delegatee_sig_revocation { "true" } else { "false" },
-        });
+        // Parse / collect gas opts
+        let opts = BatchOpts {
+            gas_limit: self.gas_limit.text.trim().to_string(),
+            max_fee_per_gas: self.max_fee_per_gas.text.trim().to_string(),
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas.text.trim().to_string(),
+        };
 
-        Ok(serde_json::to_string_pretty(&vec![obj])?)
-    }
+        // Build ABI
+        let abi = load_abi()?;
 
-    fn ensure_dir_and_unique_path(base_dir: &Path, base_filename: &str) -> Result<PathBuf> {
-        fs::create_dir_all(base_dir)
-            .with_context(|| format!("creating directory {}", base_dir.display()))?;
+        // Assemble Item for createDelegationEvent
+        let item = Item {
+            function_to_call: "createDelegationEvent".to_string(),
+            nonce: Some(nonce),
+            // ✅ FIX: Defaults::CHAIN_ID is already a u64; no parse() call needed.
+            chain_id: Some(Defaults::CHAIN_ID),
+            contract_address: Defaults::CONTRACT_ADDRESS.to_string(),
 
-        let mut candidate = base_dir.join(base_filename);
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
-        // Append " (1)", " (2)", ...
-        let (stem, ext) = split_name_ext(base_filename);
-        let mut n: u32 = 1;
-        loop {
-            let next_name = if ext.is_empty() {
-                format!("{stem} ({n})")
-            } else {
-                format!("{stem} ({n}).{ext}")
-            };
-            candidate = base_dir.join(next_name);
-            if !candidate.exists() {
-                return Ok(candidate);
-            }
-            n += 1;
-        }
-    }
+            // Type A
+            type_a_privkey_x: Some(pk_x.to_string()),
+            type_a_privkey_y: Some(pk_y.to_string()),
+            type_a_pubkey_y: Some("".to_string()), // not used if we provide privkey_y
+            type_a_uint_x: Some(0),
+            type_a_uint_y: Some(0),
+            type_a_boolean: Some(if self.require_delegatee_sig_revocation { "true".into() } else { "false".into() }),
 
-    fn write_batch_file_to_dir(&self, json_text: &str) -> Result<PathBuf> {
-        let out_dir = self.out_dir.text.trim();
-        if out_dir.is_empty() {
-            anyhow::bail!("Output Directory cannot be empty.");
-        }
+            // Type B (unused)
+            type_b_privkey_x: None,
+            type_b_privkey_y: None,
+            type_b_pubkey_y: None,
+            type_b_uint_x: None,
+            type_b_uint_y: None,
 
-        let dir = PathBuf::from(out_dir);
-        // Use a deterministic base name: "delegation_nonce_<N>.json"
-        let nonce_str = self.nonce.text.trim();
-        let base_filename = format!(
-            "delegation_nonce_{}.json",
-            if nonce_str.is_empty() { "unknown" } else { nonce_str }
-        );
+            // Type C (unused)
+            type_c_privkey_x: None,
+        };
 
-        let path = Self::ensure_dir_and_unique_path(&dir, &base_filename)?;
-        fs::write(&path, json_text)
-            .with_context(|| format!("writing {}", path.display()))?;
-        Ok(path)
+        // Build & sign the transaction
+        let entry = process_item(&abi, &opts, &item)
+            .await
+            .context("failed to construct and sign delegation transaction")?;
+
+        // Build filename per spec: "[DelegatorX]_delegates_to_[DelegateeX]_nonce_[nonce].txt"
+
+            let filename = build_filename_for_any_tx(&entry.decoded_tx);
+            let mut out_path = self.ensure_out_dir_nonempty()?;
+            out_path.push(filename);
+            let written = write_single_signed_transaction(&out_path, &entry, true)
+                .context("failed to write signed transaction file")?;
+
+
+        Ok(written)
     }
 
     fn validate_gas_limit(&self) -> Result<()> {
@@ -228,7 +238,7 @@ impl ManuallyInputDelegationInfoScreen {
             ));
         }
 
-        // Optional: ensure priority <= max fee (it always should be for sanity)
+        // Sanity: priority <= max fee
         if user_prio > user_max_fee {
             anyhow::bail!("Maximum Priority Fee Per Gas cannot exceed Maximum Fee Per Gas.");
         }
@@ -248,8 +258,10 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
     fn draw(&self, f: &mut Frame<'_>, size: Rect, _ctx: &AppCtx) {
         let header_text = "Create Delegation — Manual Input";
         let explanation_paras = [
-            "Enter the fields below. The app will generate a single-entry batch JSON",
-            "for createDelegationEvent and save it into the chosen output directory.",
+            "Enter the fields below. The app will create and sign an EIP-1559 transaction",
+            "for createDelegationEvent and save a one-element JSON array (pretty-printed)",
+            "to your chosen output directory. The filename will be:",
+            "[delegatorX]_delegates_to_[delegateeX]_nonce_[nonce].txt",
         ];
 
         // === TOP BOX ===
@@ -388,7 +400,7 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
                 self.require_delegatee_sig_revocation = !self.require_delegatee_sig_revocation;
             }
 
-            // Enter on buttons
+            // Enter on [Create Delegation]
             KeyCode::Enter if self.field_index == 8 => {
                 // Enforce caps first
                 if let Err(e) = self.validate_gas_limit() {
@@ -402,27 +414,17 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
                     )));
                 }
 
-                // Build JSON and write to selected Output Directory
-                match self.build_batch_json() {
-                    Ok(text) => {
-                        match self.write_batch_file_to_dir(&text) {
-                            Ok(path) => {
-                                let lines = vec![
-                                    "Saved delegation JSON for createDelegationEvent:".to_string(),
-                                    "".to_string(),
-                                    path.display().to_string(),
-                                ];
-                                return Ok(Transition::Push(Box::new(
-                                    ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::Pop)
-                                )));
-                            }
-                            Err(e) => {
-                                return Ok(Transition::Push(Box::new(
-                                    ConfirmOkScreen::new(&format!("Error writing file: {e:#}"))
-                                        .with_after_ok(AfterOk::Pop)
-                                )));
-                            }
-                        }
+                // Create, sign, and write the single-entry JSON
+                match self.create_and_write_delegation().await {
+                    Ok(path) => {
+                        let lines = vec![
+                            "Saved signed delegation transaction (one-element JSON array):".to_string(),
+                            "".to_string(),
+                            path.display().to_string(),
+                        ];
+                        return Ok(Transition::Push(Box::new(
+                            ConfirmOkScreen::with_lines(lines).with_after_ok(AfterOk::Pop)
+                        )));
                     }
                     Err(e) => {
                         return Ok(Transition::Push(Box::new(
@@ -432,6 +434,8 @@ impl ScreenWidget for ManuallyInputDelegationInfoScreen {
                     }
                 }
             }
+
+            // Enter on [Back]
             KeyCode::Enter if self.field_index == 9 => {
                 return Ok(Transition::Pop); // Back
             }

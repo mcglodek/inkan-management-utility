@@ -19,7 +19,7 @@ struct OrderedPayload<'a> {
     private_key_hex: String,
     private_key_nsec: String,
     public_key_hex_uncompressed: String,
-    public_key_compressed: String,
+    public_key_hex_compressed: String,
     public_key_npub: String,
 }
 
@@ -92,7 +92,7 @@ pub fn save_pgp_encrypted_from_privkey_hex(
         private_key_hex: hex::encode(sk_bytes),
         private_key_nsec: nsec_from_sk32(&sk_bytes),
         public_key_hex_uncompressed: hex::encode(uncompressed65),
-        public_key_compressed: hex::encode(compressed33),
+        public_key_hex_compressed: hex::encode(compressed33),
         public_key_npub: npub_from_xonly32(&x_only),
     };
     let data = serde_json::to_vec_pretty(&payload).expect("serialize payload");

@@ -115,7 +115,7 @@ The plaintext is UTF-8 JSON with fields:
   "private_key_hex": "<64-hex (no 0x)>",
   "private_key_nsec": "<nsec...>",
   "public_key_hex_uncompressed": "<130-hex with 0x04 prefix>",
-  "public_key_compressed": "<66-hex with 0x02/0x03 prefix>",
+  "public_key_hex_compressed": "<66-hex with 0x02/0x03 prefix>",
   "public_key_npub": "<npub...>"
 }
 ```
@@ -155,107 +155,119 @@ This format is intended for interoperability with standard OpenPGP tools (GnuPG,
 
 - With Python `PGPy` or other OpenPGP libraries: load message and call symmetric-decrypt with passphrase.
 
-### S2K / details
-- OpenPGP supports multiple S2K modes (simple, salted, iterated+salted). The exporter uses salted S2K (SHA-1) with a 96-bit salt (12 bytes) by default in current builds. Implementations using standard OpenPGP libraries will handle this automatically.
-- Because the format is OpenPGP-compliant, you **do not** need to manually derive keys or parse packet headers unless you are implementing a pure-from-scratch OpenPGP decryptor. Use an existing OpenPGP implementation where possible.
-
-### Payload (plaintext JSON)
-Same JSON structure as the Modern format (see above). The literal data packet will contain the same pretty-printed JSON.
-
 ---
 
-## Detection heuristics (how to tell formats apart)
+## How to Create an Executable for Tails
 
-- **OpenPGP** (PGP-format):
-  - ASCII-armored files begin with `-----BEGIN PGP MESSAGE-----`.
-  - Binary OpenPGP packets often start with bytes in range `0xC0..0xFF` or `0x80..0xBF` depending on packet header format. Use `gpg --list-packets` to inspect.
-  - `gpg --decrypt` will succeed for PGP files (given correct passphrase).
+This section explains **Option A (recommended)**: building a **static MUSL** Linux binary on another machine and running it on **Tails**.  
+This produces a fully self-contained binary that works offline and avoids glibc mismatches.
 
-- **Modern .enc**:
-  - First bytes often begin with small integers (e.g., `0x01 0x01` after optional 8-byte noise) if no noise prefix present.
-  - If noise prefix present, bytes 0..7 are random and bytes 8..9 will be `0x01 0x01`. A robust parser should try parsing starting at offset 0 and at offset 8 (to detect noise).
-  - Run `xxd -l 16 -g 1 file` and inspect; modern header contains predictable small integers after optional noise.
+### 1) Prepare the MUSL toolchain
 
----
+Run these commands on your development machine (Ubuntu/Debian-based):
 
-## Example decryptor commands
-
-### Modern format (using provided tools)
-- **Rust binary**:
-  ```bash
-  ./target/release/modern-decryptor <input.enc> <output.json>
-  ```
-  (Prompts for password; prints parsed Argon2 params; writes JSON.)
-
-- **Python script**:
-  ```bash
-  ./decrypt_modern_enc.py <input.enc> <output.json>
-  ```
-
-### PGP format (common)
-- **GnuPG**:
-  ```bash
-  gpg --decrypt <input>.pgp > decrypted.json
-  ```
-
-- **Sequoia (sq)**:
-  ```bash
-  sq decrypt --output decrypted.json <input>.pgp
-  ```
-
----
-
-## Interoperability & implementation guidance
-
-- If you implement a decryptor in another language, follow these exact rules:
-  - For **Modern** format: parse header exactly as specified (little-endian u32 fields), include optional noise in AAD if present; derive key with Argon2id using parameters from header; use XChaCha20-Poly1305 with the derived key and header-as-AAD.
-  - For **PGP** format: prefer using a standard OpenPGP library rather than implementing OpenPGP primitives yourself. Standard libraries handle S2K and packet parsing correctly.
-- When reading passwords:
-  - Use **raw UTF-8 bytes** exactly as entered during encryption.
-  - If you adopt Unicode normalization (NFKC), ensure both encryptor and decryptor use the same normalization.
-- Security reminders:
-  - Argon2 parameters are intentionally strong (256 MiB memory in current default). Be mindful that decryption will be memory/time expensive accordingly.
-  - Never store plaintext passwords or keys on disk. Zeroize sensitive buffers in memory where possible.
-  - The optional noise prefix is part of AAD — it is integrity-protected and must be included in verification.
-
----
-
-## Example forensic check (quick verify)
-To inspect a modern-format file header:
 ```bash
-xxd -g 1 -l 64 -c 16 SECRET_KEEP_AIRGAPPED_<nick>_Private_Key.enc
-```
-Look for either:
-- `01 01` early in the file (no noise), or
-- random bytes then `01 01` starting at offset 8 (noise prefix).
-
-For a PGP file:
-```bash
-gpg --list-packets <file>.pgp
-```
-or
-```bash
-file <file>.pgp
+sudo apt-get update
+sudo apt-get install -y musl-tools   # provides musl-gcc
+rustup target add x86_64-unknown-linux-musl
 ```
 
----
+Create or edit Cargo’s config so the MUSL target uses `musl-gcc`:
 
-## Support & troubleshooting
+```bash
+mkdir -p ~/.cargo
+cat > ~/.cargo/config.toml <<'EOF'
+[target.x86_64-unknown-linux-musl]
+linker = "musl-gcc"
+ar = "ar"
+EOF
+```
 
-- If decryption fails for Modern format:
-  - Confirm you used the exact password (UTF-8 bytes).
-  - Confirm the file is not corrupted/truncated.
-  - Confirm Argon2 params are embedded and correctly parsed; the encrypted file contains param fields in the header.
-  - Use the provided Rust or Python decryptor to verify provenance and parameter parsing.
+Alternatively, set environment variables for this session:
 
-- If decryption fails for PGP format:
-  - Confirm passphrase.
-  - Check that the file is a valid OpenPGP message and not truncated.
+```bash
+export CC_x86_64_unknown_linux_musl=musl-gcc
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+```
+
+### 2) Build a MUSL binary
+
+From the project root:
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+The resulting binary will be located at:
+```
+target/x86_64-unknown-linux-musl/release/inkan-management-utility
+```
+
+You can verify it’s static with:
+```bash
+file target/x86_64-unknown-linux-musl/release/inkan-management-utility
+```
+It should say “statically linked” or “musl”.
+
+### 3) Fixing the common `secp256k1-sys` error
+
+If you see:
+```
+failed to find tool "x86_64-linux-musl-gcc"
+error occurred in cc-rs: failed to find tool "x86_64-linux-musl-gcc"
+```
+
+It means the MUSL compiler isn’t available. Make sure you installed `musl-tools` and created the `~/.cargo/config.toml` file above.  
+Then rebuild:
+```bash
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+### 4) Copy the binary to Tails
+
+Copy `inkan-management-utility` onto a USB drive or into your **Tails Persistent Storage**.
+
+Then, on Tails, open a Terminal and run:
+
+```bash
+cd ~/Persistent
+chmod +x inkan-management-utility
+```
+
+### 5) Run it on Tails
+
+```bash
+./inkan-management-utility menu
+```
+
+If display characters look off:
+```bash
+export TERM=xterm-256color
+./inkan-management-utility menu
+```
+
+### 6) File persistence
+
+To retain files across reboots, place them in:
+```
+~/Persistent/inputFiles/
+~/Persistent/outputFiles/
+```
+
+Tails automatically erases non-persistent areas between sessions.
+
+### 7) Troubleshooting
+
+| Problem | Likely cause / fix |
+|----------|--------------------|
+| `GLIBC_x.y not found` | You built a glibc binary. Use MUSL build instructions above. |
+| `Permission denied` | Run `chmod +x inkan-management-utility`. |
+| Missing borders/colors | Run with `TERM=xterm-256color`. |
+| Build still fails on MUSL target | Reinstall `musl-tools`; verify the `config.toml` entries. |
 
 ---
 
 ## No license granted
-This project and associated code and artifacts are **NOT LICENSED**. All rights reserved. No permission to copy, modify, distribute, or otherwise use the software is granted without explicit written authorization from the owner.
 
----
-
+This project and associated code and artifacts are **NOT LICENSED**.  
+All rights reserved. No permission to copy, modify, distribute, or otherwise use the software is granted without explicit written authorization from the owner.
