@@ -1,8 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use bech32::{decode as bech32_decode, FromBase32, Variant};
 use ethers_core::abi::{Abi, Function};
 use ethers_core::types::Address;
-use ethers_signers::{LocalWallet, Signer}; // <- bring Signer trait into scope
 use ethers_core::types::U256;
+use ethers_signers::{LocalWallet, Signer}; // <- bring Signer trait into scope
 
 use crate::decoder::{build_decoded, build_decoded_for_combo};
 use crate::encoding::{bytes16_or_random, encode_calldata, t_bool, t_bytes, t_uint};
@@ -19,6 +20,47 @@ pub struct BatchOpts {
     pub max_priority_fee_per_gas: String,
 }
 
+/// Parse a secret key input as either:
+/// - hex (64 hex chars, optional 0x/0X prefix), or
+/// - bech32 "nsec1..." (payload must be exactly 32 bytes)
+fn privkey_bytes_from_input(input: &str) -> Result<[u8; 32]> {
+    let s = input.trim();
+
+    // Try nsec first if it looks like one (case-insensitive match on prefix)
+    if s.to_ascii_lowercase().starts_with("nsec1") {
+        let (hrp, data, variant) = bech32_decode(s).context("nsec: bech32 decode failed")?;
+        if variant != Variant::Bech32 {
+            return Err(anyhow!("nsec: invalid bech32 variant"));
+        }
+        if hrp.to_ascii_lowercase() != "nsec" {
+            return Err(anyhow!("nsec: invalid human-readable part '{}'", hrp));
+        }
+        let bytes = Vec::<u8>::from_base32(&data).context("nsec: invalid bech32 payload")?;
+        if bytes.len() != 32 {
+            return Err(anyhow!(
+                "nsec: payload must be exactly 32 bytes (got {})",
+                bytes.len()
+            ));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        return Ok(out);
+    }
+
+    // Otherwise, treat as hex (optionally 0x/0X-prefixed).
+    let pk = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let bytes = hex::decode(pk)?; // preserves nice hex errors like "Odd number of digits"
+    if bytes.len() != 32 {
+        return Err(anyhow!(
+            "hex secret key must be exactly 32 bytes (got {})",
+            bytes.len()
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
 /// Build the struct payload, sign, and assemble calldata for each function
 pub async fn process_item(abi: &Abi, opts: &BatchOpts, it: &Item) -> Result<BatchEntryOut> {
     let func_name = it.function_to_call.as_str();
@@ -31,11 +73,11 @@ pub async fn process_item(abi: &Abi, opts: &BatchOpts, it: &Item) -> Result<Batc
     let max_fee = &opts.max_fee_per_gas;
     let max_prio = &opts.max_priority_fee_per_gas;
 
-    // Helper to make a wallet from privkey hex
-    let mk_wallet = |hexpk: &str| -> Result<LocalWallet> {
-        let pk = hexpk.strip_prefix("0x").unwrap_or(hexpk);
-        let bytes = hex::decode(pk)?;
-        let sk = k256::ecdsa::SigningKey::from_slice(&bytes)?;
+    // Helper to make a wallet from a hex or nsec input
+    let mk_wallet = |input: &str| -> Result<LocalWallet> {
+        let sk_bytes = privkey_bytes_from_input(input)?;
+        let sk = k256::ecdsa::SigningKey::from_slice(&sk_bytes)
+            .context("invalid secp256k1 secret key (out of range or zero)")?;
         Ok(LocalWallet::from(sk).with_chain_id(chain_id))
     };
 
@@ -52,6 +94,7 @@ pub async fn process_item(abi: &Abi, opts: &BatchOpts, it: &Item) -> Result<Batc
                 .as_ref()
                 .ok_or_else(|| anyhow!("TYPE_A_PRIVKEY_X required"))?;
             let wallet = mk_wallet(owner_pk)?;
+
             // delegatee
             let (delegatee_pubkey_0x04, must_zero_sigs, delegatee_wallet_opt) =
                 match (&it.type_a_privkey_y, &it.type_a_pubkey_y) {
@@ -233,6 +276,7 @@ pub async fn process_item(abi: &Abi, opts: &BatchOpts, it: &Item) -> Result<Batc
                 .as_ref()
                 .ok_or_else(|| anyhow!("TYPE_A_PRIVKEY_X required"))?;
             let wallet = mk_wallet(owner_pk)?;
+
             // A side (delegation)
             let (delegatee_pubkey_0x04, must_zero_delegatee, delegatee_wallet_opt) =
                 match (&it.type_a_privkey_y, &it.type_a_pubkey_y) {
@@ -370,4 +414,3 @@ pub async fn process_item(abi: &Abi, opts: &BatchOpts, it: &Item) -> Result<Batc
         decoded_tx: decoded,
     })
 }
-
