@@ -24,7 +24,6 @@ enum MenuItem {
     CreateIdentity,
     RecoverIdentity,
     AdvancedTools,
-    Keygen,
     Quit,
 }
 impl MenuItem {
@@ -33,7 +32,6 @@ impl MenuItem {
             MenuItem::CreateIdentity,
             MenuItem::RecoverIdentity,
             MenuItem::AdvancedTools,
-            MenuItem::Keygen,
             MenuItem::Quit,
         ]
     }
@@ -42,7 +40,6 @@ impl MenuItem {
             MenuItem::CreateIdentity => "Create Inkan Identity",
             MenuItem::RecoverIdentity => "Recover Inkan Identity",
             MenuItem::AdvancedTools => "Advanced Tools",
-            MenuItem::Keygen => "Generate Keys",
             MenuItem::Quit => "Quit",
         }
     }
@@ -175,8 +172,6 @@ impl ScreenWidget for MainMenuScreen {
                         Transition::Push(Box::new(crate::screens::RecoverInkanIdentityScreen::new())),
                     MenuItem::AdvancedTools =>
                         Transition::Push(Box::new(crate::screens::AdvancedToolsScreen::new())),
-                    MenuItem::Keygen =>
-                        Transition::Push(Box::new(crate::screens::KeygenScreen::new())),
                     MenuItem::Quit =>
                         Transition::Quit, // ← exit immediately from main menu
                 })
