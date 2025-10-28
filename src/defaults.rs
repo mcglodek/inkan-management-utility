@@ -22,9 +22,11 @@ impl Defaults {
     /* Create Transaction */
     pub const CREATE_DELEGATION_OUT_DIR: &'static str = "./generated_transactions";
     pub const CREATE_REVOCATION_OUT_DIR: &str = "./generated_transactions";
+    pub const CREATE_REDELEGATION_OUT_DIR: &str = "./generated_transactions";
 
     pub const DELEGATION_INPUT_DIR: &'static str = "./input_files";
     pub const REVOCATION_INPUT_DIR: &'static str = "./input_files";
+    pub const REDELEGATION_INPUT_DIR: &'static str = "./input_files";
 
 
     /* Decryption */

@@ -1,10 +1,9 @@
-// src/util.rs
 use anyhow::{anyhow, Result};
 use ethers_core::types::{Address, U256};
 use std::collections::HashMap;
 
 pub fn parse_u256_any(s: &str) -> Result<U256> {
-    Ok(if let Some(x) = s.strip_prefix("0x") {
+    Ok(if let Some(x) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         U256::from_str_radix(x, 16)?
     } else {
         U256::from_dec_str(s)?
@@ -16,7 +15,10 @@ pub fn parse_addr(s: &str) -> Result<Address> {
 }
 
 pub fn hex_to_bytes(s: &str) -> Result<Vec<u8>> {
-    let t = s.strip_prefix("0x").unwrap_or(s);
+    // Accept both lowercase and uppercase 0x prefix
+    let t = s.strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     Ok(hex::decode(t)?)
 }
 
@@ -79,5 +81,10 @@ pub fn parse_delegation_env(contents: &str) -> HashMap<String, String> {
 
 /// Dotenv-style parser for revocation info files (same rules as delegation).
 pub fn parse_revocation_env(contents: &str) -> HashMap<String, String> {
+    parse_kv_env(contents)
+}
+
+/// Dotenv-style parser for re-delegation info files (same rules as delegation).
+pub fn parse_redelegation_env(contents: &str) -> HashMap<String, String> {
     parse_kv_env(contents)
 }

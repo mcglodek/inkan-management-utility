@@ -14,7 +14,7 @@ pub mod advanced_tools;
 pub mod create_key_pair;
 pub mod create_delegation;                // canonical Create Delegation screen (manual input)
 pub mod create_revocation;                // canonical Create Revocation screen (manual input)
-pub mod create_redelegation;
+pub mod create_redelegation;              // canonical Create Re-Delegation screen (manual input)
 pub mod create_permanent_invalidation;
 
 // Decrypt flow
@@ -29,6 +29,10 @@ pub mod select_delegation_info_file;
 // Load-from-file flows (revocation)
 pub mod choose_revocation_info_dir;
 pub mod select_revocation_info_file;
+
+// Load-from-file flows (re-delegation)
+pub mod choose_redelegation_info_dir;
+pub mod select_redelegation_info_file;
 
 // ---------------- Re-exports ----------------
 pub use main_menu::MainMenuScreen;
@@ -56,6 +60,9 @@ pub use select_delegation_info_file::SelectDelegationInfoFileScreen;
 
 pub use choose_revocation_info_dir::ChooseRevocationInfoDirScreen;
 pub use select_revocation_info_file::SelectRevocationInfoFileScreen;
+
+pub use choose_redelegation_info_dir::ChooseRedelegationInfoDirScreen;
+pub use select_redelegation_info_file::SelectRedelegationInfoFileScreen;
 
 // Re-export the confirmation screen type
 pub mod confirm_ok;

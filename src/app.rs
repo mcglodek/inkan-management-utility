@@ -27,9 +27,9 @@ pub enum Transition {
     PopN(usize),
 }
 
-/// Small handoff bucket used when loading a delegation/revocation info file.
+/// Small handoff bucket used when loading a delegation/revocation/redelegation info file.
 /// The file select screen fills this map; the target input screen
-/// (Create Delegation or Create Revocation) reads and applies it once, then clears it.
+/// (Create Delegation / Create Revocation / Create Re-Delegation) reads and applies it once, then clears it.
 #[derive(Debug, Clone, Default)]
 pub struct DelegationPrefill {
     pub map: HashMap<String, String>,
@@ -46,6 +46,10 @@ pub struct AppCtx {
     /// If set, contains key/value pairs loaded from a revocation info file.
     /// The Revocation Input screen should `take()` and apply these once.
     pub pending_revocation_prefill: Option<DelegationPrefill>,
+
+    /// If set, contains key/value pairs loaded from a re-delegation info file.
+    /// The Re-Delegation Input screen should `take()` and apply these once.
+    pub pending_redelegation_prefill: Option<DelegationPrefill>,
 }
 
 #[async_trait]
