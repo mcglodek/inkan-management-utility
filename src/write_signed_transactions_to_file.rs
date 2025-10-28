@@ -54,6 +54,7 @@ pub fn write_single_signed_transaction<P: AsRef<Path>>(
 
 /// Build a generic, human-readable filename for any signed transaction.
 pub fn build_filename_for_any_tx(decoded: &DecodedTxOut) -> String {
+    // 1) Simple Delegation
     if let Some(DecodedOne::Delegation(a)) = decoded.decodedData.as_ref() {
         if let (Ok(delg_x), Ok(dele_x)) = (
             x_coord_hex_from_uncompressed(&a.delegatorPubkey),
@@ -68,13 +69,14 @@ pub fn build_filename_for_any_tx(decoded: &DecodedTxOut) -> String {
         }
     }
 
+    // 2) Simple Revocation
     if let Some(DecodedOne::Revocation(b)) = decoded.decodedData.as_ref() {
         if let (Ok(revoker_x), Ok(revokee_x)) = (
             x_coord_hex_from_uncompressed(&b.revokerPubkey),
             x_coord_hex_from_uncompressed(&b.revokeePubkey),
         ) {
             return format!(
-                "{}_revokes_{}_nonce_{}.txt",
+                "{}_revokes_from_{}_nonce_{}.txt",
                 abbrev_64_hex(&revoker_x),
                 abbrev_64_hex(&revokee_x),
                 decoded.nonce
@@ -82,14 +84,37 @@ pub fn build_filename_for_any_tx(decoded: &DecodedTxOut) -> String {
         }
     }
 
+    // 3) Permanent Invalidation
     if let Some(DecodedOne::Invalidation(i)) = decoded.decodedData.as_ref() {
         if let Ok(x) = x_coord_hex_from_uncompressed(&i.invalidatedPubkey) {
-            return format!("{}_invalidation_nonce_{}.txt", abbrev_64_hex(&x), decoded.nonce);
+            return format!("invalidate_{}_nonce_{}.txt", abbrev_64_hex(&x), decoded.nonce);
         }
     }
 
+    // 4) REDELEGATION (Revocation + Delegation combo)
+
+    if decoded.funcName == "createRevocationEventFollowedByDelegationEvent" {
+        if let (Some(a), Some(b)) = (decoded.decodedDataTypeA.as_ref(), decoded.decodedDataTypeB.as_ref()) {
+            if let (Ok(revoker_x), Ok(revokee_x), Ok(delegatee_x)) = (
+                x_coord_hex_from_uncompressed(&b.revokerPubkey),
+                x_coord_hex_from_uncompressed(&b.revokeePubkey),
+                x_coord_hex_from_uncompressed(&a.delegateePubkey),
+            ) {
+                return format!(
+                    "{}_revokes_from_{}_delegates_to_{}_nonce_{}.txt",
+                    abbrev_64_hex(&revoker_x),
+                    abbrev_64_hex(&revokee_x),
+                    abbrev_64_hex(&delegatee_x),
+                    decoded.nonce
+                );
+            }
+        }
+    }
+
+    // 5) Fallback
     format!("{}_nonce_{}.txt", decoded.funcName, decoded.nonce)
 }
+
 
 /// Extract the 32-byte X coordinate (64 hex chars) from an uncompressed pubkey hex.
 /// Accepts "0x04..." or "04..." (hex), must be 65 bytes = 130 hex chars.
