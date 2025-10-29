@@ -1,6 +1,7 @@
 pub mod modern;
 pub mod nostr_utils;
 pub mod pgp;
+pub mod payload; // ⬅️ add this line
 
 use zeroize::Zeroize;
 

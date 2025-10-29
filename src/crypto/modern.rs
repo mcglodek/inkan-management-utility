@@ -1,12 +1,11 @@
-use crate::crypto::nostr_utils::{npub_from_xonly32, nsec_from_sk32};
+use crate::crypto::payload::build_payload_pretty_from_sk;
 
 use argon2::Argon2;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use secp256k1::{PublicKey, SecretKey};
-use serde::Serialize;
+use secp256k1::SecretKey;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::io::ErrorKind;
@@ -26,22 +25,11 @@ pub struct ModernOptions<'a> {
     /// Password bytes (UTF-8). This will be zeroized here.
     pub password_utf8: &'a mut Vec<u8>,
     /// Argon2id params
-    pub t_cost: u32,       // iterations
-    pub m_cost_kib: u32,   // memory in KiB
-    pub p_cost: u8,        // parallelism
+    pub t_cost: u32,     // iterations
+    pub m_cost_kib: u32, // memory in KiB
+    pub p_cost: u8,      // parallelism
     /// If true, include 8 bytes of random preface noise to look like ciphertext.
     pub add_noise_prefix: bool,
-}
-
-/// JSON payload with **exact field order** you requested.
-#[derive(Serialize)]
-struct OrderedPayload<'a> {
-    key_pair_nickname: &'a str,
-    private_key_hex: String,
-    private_key_nsec: String,
-    public_key_hex_uncompressed: String,
-    public_key_hex_compressed: String,
-    public_key_npub: String,
 }
 
 /// Create a file with a unique name, avoiding overwrite by appending " (1)", " (2)", ...
@@ -57,9 +45,15 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 
     for i in 0..10_000 {
         let candidate_name = if i == 0 {
-            if ext.is_empty() { stem.to_string() } else { format!("{stem}.{ext}") }
+            if ext.is_empty() {
+                stem.to_string()
+            } else {
+                format!("{stem}.{ext}")
+            }
+        } else if ext.is_empty() {
+            format!("{stem} ({i})")
         } else {
-            if ext.is_empty() { format!("{stem} ({i})") } else { format!("{stem} ({i}).{ext}") }
+            format!("{stem} ({i}).{ext}")
         };
         let path = base_dir.join(&candidate_name);
 
@@ -77,11 +71,11 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 /// Recomputes all public forms from the private key to ensure internal consistency.
 /// RETURNS: PathBuf of the actual file written.
 ///
-/// IMPORTANT: This function now **respects the provided filename** (if any) in `opts.file_path`.
-/// If `opts.file_path` is a directory, we fall back to a safe default filename derived from the nickname.
+/// IMPORTANT: This function **respects the provided filename** (if any) in `opts.file_path`.
+/// If `opts.file_path` is a directory, we derive a filename from the nickname.
 pub fn save_modern_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
-    opts: ModernOptions<'_>,
+    mut opts: ModernOptions<'_>,
 ) -> io::Result<PathBuf> {
     // 1) Decode privkey (32 bytes)
     let sk_bytes_vec = hex::decode(privkey_hex_no0x)
@@ -92,28 +86,16 @@ pub fn save_modern_encrypted_from_privkey_hex(
     let mut sk_bytes = [0u8; 32];
     sk_bytes.copy_from_slice(&sk_bytes_vec);
 
-    // 2) Derive public keys
-    let sk = SecretKey::from_slice(&sk_bytes)
+    // Validate the secret key early (will also be used inside payload builder)
+    let _ = SecretKey::from_slice(&sk_bytes)
         .map_err(|e| io_err(format!("invalid secret key: {e}")))?;
-    let pk = PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
 
-    let uncompressed65 = pk.serialize_uncompressed(); // 65 bytes: 0x04 || X || Y
-    let compressed33 = pk.serialize();                // 33 bytes
-    let x_only: [u8; 32] = uncompressed65[1..33].try_into().unwrap();
+    // 2) Build ordered, pretty JSON payload (centralized in payload.rs)
+    //    Includes: nickname, private_key_hex, private_key_nsec, public keys, npub, and **address**.
+    let payload_pretty = build_payload_pretty_from_sk(opts.key_pair_nickname, &sk_bytes)
+        .map_err(|e| io_err(format!("payload build error: {e}")))?;
 
-    // 3) Build ordered, pretty JSON payload
-    let payload = OrderedPayload {
-        key_pair_nickname: opts.key_pair_nickname,
-        private_key_hex: hex::encode(sk_bytes),
-        private_key_nsec: nsec_from_sk32(&sk_bytes),
-        public_key_hex_uncompressed: hex::encode(uncompressed65),
-        public_key_hex_compressed: hex::encode(compressed33),
-        public_key_npub: npub_from_xonly32(&x_only),
-    };
-    let payload_pretty = serde_json::to_string_pretty(&payload)
-        .expect("serialize payload");
-
-    // 4) KDF: Argon2id -> 32-byte key
+    // 3) KDF: Argon2id -> 32-byte key
     let mut rng = ChaCha20Rng::from_entropy();
     let mut salt = vec![0u8; 16];
     rng.fill_bytes(&mut salt);
@@ -124,14 +106,15 @@ pub fn save_modern_encrypted_from_privkey_hex(
         argon2::Version::V0x13,
         argon2::Params::new(opts.m_cost_kib, opts.t_cost, opts.p_cost as u32, None)
             .expect("argon2 params"),
-    ).expect("argon2 ctor");
+    )
+    .expect("argon2 ctor");
 
     let mut key = [0u8; 32];
     argon
         .hash_password_into(opts.password_utf8, &salt, &mut key)
         .map_err(|e| io_err(format!("Argon2 error: {e}")))?;
 
-    // 5) Nonce and header
+    // 4) Nonce and header
     let mut nonce = [0u8; 24];
     rng.fill_bytes(&mut nonce);
 
@@ -140,7 +123,15 @@ pub fn save_modern_encrypted_from_privkey_hex(
     // [u8 salt_len][salt][u8 nonce_len=24][nonce]
     let mut header = Vec::with_capacity(
         (if opts.add_noise_prefix { 8 } else { 0 })
-        + 1 + 1 + 4 + 4 + 1 + 1 + salt.len() + 1 + nonce.len()
+            + 1
+            + 1
+            + 4
+            + 4
+            + 1
+            + 1
+            + salt.len()
+            + 1
+            + nonce.len(),
     );
 
     if opts.add_noise_prefix {
@@ -153,27 +144,29 @@ pub fn save_modern_encrypted_from_privkey_hex(
     header.push(KDF_ID_ARGON2ID);                             // u8
     header.extend_from_slice(&opts.t_cost.to_le_bytes());     // u32
     header.extend_from_slice(&opts.m_cost_kib.to_le_bytes()); // u32
-    header.push(opts.p_cost);                                  // u8
-    header.push(salt.len() as u8);                             // u8
-    header.extend_from_slice(&salt);                           // salt
-    header.push(nonce.len() as u8);                            // u8
-    header.extend_from_slice(&nonce);                          // nonce
+    header.push(opts.p_cost);                                 // u8
+    header.push(salt.len() as u8);                            // u8
+    header.extend_from_slice(&salt);                          // salt
+    header.push(nonce.len() as u8);                           // u8
+    header.extend_from_slice(&nonce);                         // nonce
 
-    // 6) Encrypt (AAD = header)
+    // 5) Encrypt (AAD = header)
     let cipher = XChaCha20Poly1305::new((&key).into());
     let ciphertext = cipher
         .encrypt((&nonce).into(), Payload { aad: &header, msg: payload_pretty.as_bytes() })
         .map_err(|e| io_err(format!("encrypt error: {e}")))?;
 
-    // 7) Resolve output path & write file: [header || ciphertext] with unique filename.
-    // Respect the provided filename if present; otherwise derive from nickname.
+    // 6) Resolve output path & write file: [header || ciphertext] with unique filename
     let provided = Path::new(opts.file_path);
 
     // Determine base_dir and filename_to_use
     let (base_dir, filename_to_use): (PathBuf, String) = if provided.file_name().is_some() {
         // A filename was provided
         let parent = provided.parent().unwrap_or_else(|| Path::new("."));
-        (parent.to_path_buf(), provided.file_name().unwrap().to_string_lossy().into_owned())
+        (
+            parent.to_path_buf(),
+            provided.file_name().unwrap().to_string_lossy().into_owned(),
+        )
     } else {
         // Only a directory was provided — derive a default from nickname
         let base = provided.to_path_buf();
@@ -182,8 +175,8 @@ pub fn save_modern_encrypted_from_privkey_hex(
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
             .collect();
-        let safe_nickname = if safe_nickname.is_empty() { "Keypair".to_string() } else { safe_nickname };
-        // Default modern extension if none was given upstream
+        let safe_nickname =
+            if safe_nickname.is_empty() { "Keypair".to_string() } else { safe_nickname };
         let derived = format!("{}_Private_Key.inkan", safe_nickname);
         (base, derived)
     };
@@ -199,13 +192,13 @@ pub fn save_modern_encrypted_from_privkey_hex(
     w.write_all(&ciphertext)?;
     w.flush()?;
 
-    // 8) Zeroize sensitive buffers
+    // 7) Zeroize sensitive buffers
     key.zeroize();
     salt.zeroize();
     opts.password_utf8.zeroize();
     sk_bytes.zeroize();
 
-    // 9) Return the actual final path for UI display
+    // 8) Return the actual final path for UI display
     Ok(final_path)
 }
 

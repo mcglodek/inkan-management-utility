@@ -1,7 +1,6 @@
-use crate::crypto::nostr_utils::{npub_from_xonly32, nsec_from_sk32};
+use crate::crypto::payload::build_payload_pretty_from_sk;
 
-use secp256k1::{PublicKey, SecretKey};
-use serde::Serialize;
+use secp256k1::SecretKey;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::io::ErrorKind;
@@ -12,16 +11,6 @@ use openpgp::crypto::Password;
 use openpgp::serialize::stream::{Encryptor2, LiteralWriter, Message};
 use openpgp::types::SymmetricAlgorithm;
 use std::path::{Path, PathBuf};
-
-#[derive(Serialize)]
-struct OrderedPayload<'a> {
-    key_pair_nickname: &'a str,
-    private_key_hex: String,
-    private_key_nsec: String,
-    public_key_hex_uncompressed: String,
-    public_key_hex_compressed: String,
-    public_key_npub: String,
-}
 
 /// Create a file with a unique name, avoiding overwrite by appending " (1)", " (2)", ...
 fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, PathBuf)> {
@@ -61,7 +50,7 @@ fn create_unique_file(base_dir: &Path, filename: &str) -> io::Result<(File, Path
 /// `privkey_hex_no0x` must be 32-byte hex without `0x`.
 /// RETURNS: PathBuf of the actual file written.
 ///
-/// IMPORTANT: This function now **respects the provided filename** in `file_path` if present.
+/// IMPORTANT: This function **respects the provided filename** in `file_path` if present.
 /// If `file_path` is a directory, it derives `"{safe_nickname}_Private_Key.pgp"`.
 pub fn save_pgp_encrypted_from_privkey_hex(
     privkey_hex_no0x: &str,
@@ -78,25 +67,14 @@ pub fn save_pgp_encrypted_from_privkey_hex(
     let mut sk_bytes = [0u8; 32];
     sk_bytes.copy_from_slice(&sk_bytes_vec);
 
-    // 2) Derive public keys
-    let sk = SecretKey::from_slice(&sk_bytes)
+    // 2) Validate secret key early
+    let _ = SecretKey::from_slice(&sk_bytes)
         .map_err(|e| io_err(format!("invalid secret key: {e}")))?;
-    let pk = PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
 
-    let uncompressed65 = pk.serialize_uncompressed();
-    let compressed33 = pk.serialize();
-    let x_only: [u8; 32] = uncompressed65[1..33].try_into().unwrap();
-
-    // 3) Pretty ordered JSON (same order/fields as Modern)
-    let payload = OrderedPayload {
-        key_pair_nickname: nickname,
-        private_key_hex: hex::encode(sk_bytes),
-        private_key_nsec: nsec_from_sk32(&sk_bytes),
-        public_key_hex_uncompressed: hex::encode(uncompressed65),
-        public_key_hex_compressed: hex::encode(compressed33),
-        public_key_npub: npub_from_xonly32(&x_only),
-    };
-    let data = serde_json::to_vec_pretty(&payload).expect("serialize payload");
+    // 3) Pretty ordered JSON from centralized builder (includes `address`)
+    let payload_pretty = build_payload_pretty_from_sk(nickname, &sk_bytes)
+        .map_err(|e| io_err(format!("payload build error: {e}")))?;
+    let data = payload_pretty.into_bytes();
 
     // 4) Resolve output directory + filename
     let safe_nickname = {
@@ -129,12 +107,11 @@ pub fn save_pgp_encrypted_from_privkey_hex(
     let (f, final_path) = create_unique_file(&base_dir, &filename_to_use)?;
     let mut w = BufWriter::new(f);
 
-    // 6) Encrypt (legacy-compatible: no explicit AEAD call)
+    // 6) Encrypt (legacy-compatible: SEIP using AES-256; gpg & sq can decrypt today)
     let pass = Password::from(password_utf8.clone());
     let message = Message::new(&mut w);
     let message = Encryptor2::with_passwords(message, [pass])
         .symmetric_algo(SymmetricAlgorithm::AES256)
-        // NOTE: No explicit AEAD; this yields SEIP (CFB+MDC) that gpg & sq can decrypt today.
         .build()
         .map_err(|e| io_err(format!("pgp encryptor build: {e}")))?;
 

@@ -49,3 +49,5 @@ sequoia-openpgp = { version = "1", default-features = false, features = ["crypto
 
 # Optional: if you use async traits anywhere
 async-trait = "0.1"
+
+tiny-keccak = "2"
